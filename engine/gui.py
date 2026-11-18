@@ -524,6 +524,15 @@ class App(ctk.CTk):
         add(f, "Max repeats of one song per 10 clips (0 = no limit)", "rotation_max", "entry", ms.rotation_max)
         add(f, "Show song name tag", "sound_tag", "switch", ms.sound_tag)
         add(f, "Song card at the end", "end_card", "switch", ms.end_card)
+        f = section("CREDITS (video name and creator)")
+        add(f, "Show the creator's name on the clip", "show_attribution", "switch", cs.show_attribution)
+        add(f, "Put the creator + link in the post caption", "credit_in_caption", "switch", cs.credit_in_caption)
+        fn = {"video": "Use the video's title", "number": "Hide the title (Video 3 - song - Clip 01)"}
+        add(f, "Clip folder names", "folder_names", "menu", fn[load_settings().folder_names], list(fn.values()))
+        ctk.CTkLabel(f, text="Some creators and clipping programs require credit. Turn these off only if you are allowed to.",
+                     font=font(11), text_color=MUTED, anchor="w", wraplength=480, justify="left").grid(
+            row=f.n, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 12))
+        f.n += 1
         f = section("CLIP LENGTH")
         add(f, "Minimum clip length (seconds)", "min_length", "entry", int(load_settings().clips.min_length))
         add(f, "Longest clip (seconds)", "max_duration", "entry", int(load_settings().clips.max_duration))
@@ -590,6 +599,8 @@ class App(ctk.CTk):
             cfg.music.style = next((k for k, v in styles.items() if v == vars_["music_style"].get()), "auto")
             cfg.clips.min_length, cfg.clips.max_duration = float(lo), float(hi)
             cfg.music.rotation_max = int(rot)
+            c.show_attribution, c.credit_in_caption = bool(vars_["show_attribution"].get()), bool(vars_["credit_in_caption"].get())
+            cfg.folder_names = "number" if vars_["folder_names"].get().startswith("Hide") else "video"
             cfg.music.ai_placement = bool(vars_["ai_placement"].get())
             cfg.music.sound_tag, cfg.music.end_card = bool(vars_["sound_tag"].get()), bool(vars_["end_card"].get())
             v = cfg.video

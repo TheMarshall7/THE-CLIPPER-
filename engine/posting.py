@@ -46,7 +46,9 @@ def caption(clip: dict, platform: str) -> str:
         out += " " + tags
     if extra:
         out += "\n" + "\n".join(extra)
-    if meta.get("attribution") and meta["attribution"] not in out:
+    from engine.config import load_settings
+
+    if meta.get("attribution") and meta["attribution"] not in out and load_settings().captions.credit_in_caption:
         out += "\n" + meta["attribution"]
     return out.strip()
 

@@ -81,6 +81,8 @@ class CaptionStyle(BaseModel):
     uppercase: bool = True
     show_hook: bool = True
     hook_seconds: float = 2.8
+    show_attribution: bool = True     # creator name + platform at the top of the clip
+    credit_in_caption: bool = True    # creator name + link inside the post caption / description
     title_style: Literal["box", "yellow", "dark", "red", "outline"] = "box"   # look of the title card at the start
 
 
@@ -232,6 +234,7 @@ class WatchSettings(BaseModel):
 
 class Settings(BaseModel):
     storage_dir: str = "storage"
+    folder_names: Literal["video", "number"] = "video"    # Clips/<video title> - song - Clip 01   or   Clips/Video 3 - song - Clip 01
     library_dir: str = "library"
     max_concurrent_jobs: int = 1
     max_job_attempts: int = 3

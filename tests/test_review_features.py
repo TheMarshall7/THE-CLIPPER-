@@ -313,3 +313,13 @@ def test_one_song_can_be_used_for_100_clips(tmp_path):
     assert song_ineligible(song, artist, "", "funny", True, d, 10, 0, None) is None                 # default: no limit
     assert "rotation limit" in song_ineligible(song, artist, "", "funny", True, d, 10, 3, None)     # still available if you ask for it
     assert Settings().music.rotation_max == 0
+
+
+def test_credit_switches_default_on_and_drop_the_overlay_line():
+    from engine.captions.ass import build_ass
+    from engine.config import CaptionStyle
+    st = CaptionStyle()
+    assert st.show_attribution and st.credit_in_caption and Settings().folder_names == "video"
+    with_credit = build_ass([], 3.0, st, 1080, 1920, "split", 0.38, attribution="Kai Cenat · YouTube")
+    without = build_ass([], 3.0, st, 1080, 1920, "split", 0.38, attribution=None)
+    assert "Kai Cenat" in with_credit and "Kai Cenat" not in without and ",Attr," not in without.split("[Events]")[1]

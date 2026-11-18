@@ -691,6 +691,11 @@ class Engine:
                 "profile_label": prof.label, "copy_note": prof.copy_note, "hook_style": prof.hook_style,
                 "clip_word": prof.clip_word,
             }, self.provider, log=lambda m: self.log(m, stream["id"]))
+        if not self.s.captions.credit_in_caption and meta.get("attribution"):       # no creator credit / link in the post text
+            meta["description"] = (meta.get("description") or "").replace(meta["attribution"], "").strip()
+            for v in (meta.get("platform_variants") or {}).values():
+                v["caption"] = v.get("caption", "").replace(meta["attribution"], "").strip()
+            meta["attribution"] = ""
         hooks = meta["hooks"]
         hook = hooks[min(clip["hook_choice"], len(hooks) - 1)] if hooks else None
         chosen = music.get("chosen")
@@ -726,7 +731,7 @@ class Engine:
         style = self.s.captions.model_copy(update=loads(clip["caption_style_json"], {}))
         plat_name = {"youtube": "YouTube", "twitch": "Twitch", "kick": "Kick"}.get(stream["platform"])
         attribution = (f"{streamer['name']}" + (f" · {plat_name}" if plat_name else "")) \
-            if streamer and streamer["name"] != "unknown" else None
+            if streamer and streamer["name"] != "unknown" and style.show_attribution else None
         band_bottom = None
         gm = stored.get("gameplay_mode") or ("fit_blur" if layout["layout"] == "gameplay_only" else self.s.video.gameplay_mode)
         if layout["layout"] == "gameplay_only" and gm == "fit_blur" and pinfo.width:

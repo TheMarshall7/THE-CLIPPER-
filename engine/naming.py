@@ -38,7 +38,12 @@ def clip_label(db, clip_id: int) -> str:
     clip = db.one("SELECT stream_id FROM clips WHERE id=?", (clip_id,))
     stream = db.one("SELECT s.title, st.name streamer FROM streams s LEFT JOIN streamers st ON st.id=s.streamer_id WHERE s.id=?",
                     (clip["stream_id"],))
-    title = safe(stream["title"] or stream["streamer"], 48) or f"Video {clip['stream_id']}"
+    from engine.config import load_settings
+
+    if load_settings().folder_names == "number":                       # keep the video's name out of the folder names
+        title = f"Video {clip['stream_id']}"
+    else:
+        title = safe(stream["title"] or stream["streamer"], 48) or f"Video {clip['stream_id']}"
     song = safe(song_title(db, clip_id), 28) or NO_SONG
     return f"{title} - {song} - Clip {clip_number(db, clip_id, clip['stream_id']):02d}"
 
