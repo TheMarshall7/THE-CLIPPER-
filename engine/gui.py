@@ -1202,6 +1202,73 @@ class App(ctk.CTk):
             self.seen_songs[str(f)] = "Error: " + str(e)[:60]
             self.db.log("error", f"[music] import failed for '{title}': {e}")
 
+    def confirm(self, title: str, message: str, yes_label: str, on_yes, danger: bool = True) -> None:
+        """Themed "Are you sure?" dialog (same look as the rest of the app) instead of a grey system box."""
+        win = ctk.CTkToplevel(self, fg_color=BG)
+        win.title(title)
+        win.geometry("520x300")
+        win.resizable(False, False)
+        win.transient(self)
+        win.after(150, lambda: (self._dark_caption(win), win.grab_set(), win.focus_force()))
+        win.grid_columnconfigure(0, weight=1)
+        box = card(win)
+        box.grid(row=0, column=0, sticky="nsew", padx=24, pady=(24, 12))
+        box.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(box, text="⚠", font=font(30), text_color=RED if danger else AMBER).grid(row=0, column=0, pady=(18, 0))
+        ctk.CTkLabel(box, text=title, font=font(19, "bold"), text_color=TEXT).grid(row=1, column=0, pady=(2, 6))
+        ctk.CTkLabel(box, text=message, font=font(13), text_color=MUTED, wraplength=440, justify="center").grid(
+            row=2, column=0, padx=20, pady=(0, 18))
+        bar = ctk.CTkFrame(win, fg_color="transparent")
+        bar.grid(row=1, column=0, pady=(0, 20))
+
+        def yes() -> None:
+            win.destroy()
+            on_yes()
+        no = button(bar, "Cancel", win.destroy, width=130, height=44, fg_color=CARD2)
+        no.pack(side="left", padx=8)
+        button(bar, yes_label, yes, width=170, height=44, fg_color=RED if danger else VIOLET,
+               hover_color="#C23B40" if danger else PINK, text_color="white").pack(side="left", padx=8)
+        win.bind("<Escape>", lambda e: win.destroy())
+
+    def _remove_song(self, sid: int, title: str) -> None:
+        self.confirm("Remove this song?",
+                     f"“{title}” will be removed from your library and will no longer be used on new clips.\n\n"
+                     "Clips you already made keep their sound. The original file is moved to Songs/_removed, so you can get it back.",
+                     "Yes, remove it", lambda: self._do_remove_song(sid, title))
+
+    def _do_remove_song(self, sid: int, title: str) -> None:
+        from engine.music.library import file_hash
+
+        try:
+            row = self.db.one("SELECT file_hash FROM songs WHERE id=?", (sid,))
+            h = row["file_hash"] if row else None
+            self.server.delete_song(sid)             # database rows + the library copy
+            moved = 0
+            if h:                                    # the original in Songs/ would be re-imported on the next scan
+                trash = self.songs_dir / "_removed"
+                for f in self.songs_dir.iterdir():
+                    if f.is_file() and f.suffix.lower() in SONG_EXTS:
+                        try:
+                            same = file_hash(f) == h
+                        except OSError:
+                            same = False
+                        if same:
+                            trash.mkdir(exist_ok=True)
+                            dest = trash / f.name
+                            k = 1
+                            while dest.exists():
+                                dest = trash / f"{f.stem}_{k}{f.suffix}"
+                                k += 1
+                            f.replace(dest)
+                            self.seen_songs.pop(str(f), None)
+                            moved += 1
+            self.songs_cache = [s for s in self.songs_cache if s.get("id") != sid]
+            self._refresh_songs(self.server.songs())
+            self._log(f"Removed “{title}”." + (" Original moved to Songs/_removed." if moved else ""))
+        except Exception as e:
+            self._log(f"Could not remove “{title}”: {e}")
+            messagebox.showerror("Could not remove", str(e))
+
     def _edit_hook(self, sid: int) -> None:
         from engine.song_hook_ui import open_hook_editor
         open_hook_editor(self, sid)
@@ -1272,7 +1339,9 @@ class App(ctk.CTk):
                 if sid is not None:
                     button(r, "Hook…", lambda i=sid: self._edit_hook(i), width=80, height=34).grid(row=0, column=3, rowspan=2, padx=(0, 8))
                     button(r, "Edit", lambda i=sid, t=title, a=artist, e=explicit: self._edit_song(i, t, a, e),
-                           width=70, height=34).grid(row=0, column=4, rowspan=2, padx=(0, 22))
+                           width=70, height=34).grid(row=0, column=4, rowspan=2, padx=(0, 8))
+                    button(r, "Remove", lambda i=sid, t=title: self._remove_song(i, t), width=84, height=34, fg_color=CARD,
+                           hover_color=RED, text_color=RED).grid(row=0, column=5, rowspan=2, padx=(0, 22))
         self._redraw("songs", (tuple(rows), waiting), self.songs_list, build)
 
     def _refresh_streams(self, streams: list[dict]) -> None:
