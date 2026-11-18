@@ -171,3 +171,73 @@ def test_ai_brief_follows_the_live_settings(song_analysis):
     s.music.pre_drop_dropout, s.captions.lyrics, s.music.ducking = "off", "off", "tight"
     b2 = promo.ai_brief("Tweakin", "Moqemae", song_analysis, 6.9, 13.0, s, song_first=True)
     assert "silence" not in b2.lower() and "lyrics" not in b2.lower() and "dips under each" in b2
+
+
+# ---------------------------------------------------------------- speed ramps and beat effects
+def test_ramps_shift_by_whole_beats_and_keep_the_hit_synced():
+    beat = 60 / 140
+    keep = [(20.0, 45.0)]
+    hit = 31.0
+    pieces, info = promo.ramp_plan(keep, hit, beat, [])
+    assert set(info) == {"speed_up", "slow_mo"}
+    assert promo.out_len(pieces) == pytest.approx(25.0, abs=1e-6)        # -1 beat before the hit, +1 beat after
+    assert promo.src_to_out(hit, pieces) == pytest.approx(11.0 - beat, abs=1e-6)
+    later = 40.0                                                          # after both ramps: back exactly where it was
+    assert promo.src_to_out(later, pieces) == pytest.approx(later - 20.0, abs=1e-6)
+    pl = {"song_in": 10.0, "song_out": 30.0, "clip_in": 0.0, "clip_out": 20.0, "mode": "moment_drop",
+          "payoff_sync": {"clip_time": 11.0, "song_downbeat": 21.0}}
+    new = promo.resync_placement(pl, keep, pieces, 25.0)
+    hit_out = new["payoff_sync"]["clip_time"]
+    assert hit_out == pytest.approx(11.0 - beat, abs=1e-4)
+    # the song position under the hit is still the chorus downbeat
+    assert new["song_in"] + (hit_out - new["clip_in"]) == pytest.approx(21.0, abs=1e-4)
+    assert new["song_out"] <= 30.0 + 1e-6
+
+
+def test_ramps_skip_talking_and_cuts():
+    beat = 0.5
+    words = [{"start": 30.0 + i * 0.3, "end": 30.25 + i * 0.3, "word": "something"} for i in range(4)]
+    pieces, info = promo.ramp_plan([(20.0, 45.0)], 31.0, beat, words)
+    assert "speed_up" not in info                                         # someone is talking right before the hit
+    pieces, info = promo.ramp_plan([(20.0, 30.5), (31.5, 40.0)], 31.6, beat, [])
+    assert "speed_up" not in info and "slow_mo" in info                   # would cross the jump cut
+
+
+def test_next_hit_is_nudged_onto_a_bar_without_moving_anything_after():
+    bar = 2.0
+    pieces = promo.pieces_from_keep([(0.0, 30.0)])
+    hit_out = 5.0
+    pieces, done = promo.nudge_hits(pieces, [8.8], hit_out, bar, [], after_src=5.5)
+    far, none = promo.nudge_hits(promo.pieces_from_keep([(0.0, 30.0)]), [8.5], hit_out, bar, [], after_src=5.5)
+    assert none == []                                                     # would need >12% speed change: left alone
+    assert len(done) == 1
+    assert promo.src_to_out(8.8, pieces) == pytest.approx(9.0, abs=1e-4)          # landed on the bar (5 + 2*2)
+    assert promo.src_to_out(20.0, pieces) == pytest.approx(20.0, abs=1e-4)         # everything later untouched
+    assert all(0.88 <= s <= 1.12 for _, _, s in pieces)
+
+
+def test_audio_follows_the_speed_of_each_piece():
+    sr = mixing.SR
+    a = np.zeros((int(4 * sr), 2), np.float32)
+    out = mixing.apply_cuts(a, [(0.0, 2.0), (2.0, 3.0), (3.0, 4.0)], speeds=[1.0, 0.5, 2.0])
+    assert out.shape[0] / sr == pytest.approx(2.0 + 2.0 + 0.5, abs=0.02)
+
+
+def test_beat_fx_filter_runs(tmp_path, song_analysis):
+    import subprocess
+    from engine.video.compose import beat_fx_chain
+    fx = promo.fx_spec(song_analysis, {"clip_in": 0.0, "clip_out": 3.0, "song_in": 10, "song_out": 13,
+                                       "payoff_sync": {"clip_time": 1.0, "song_downbeat": 11.0}})
+    assert fx and fx["beat"] == pytest.approx(60 / song_analysis["bpm"], abs=1e-4)
+    chain = beat_fx_chain(fx, 270, 480)
+    out = tmp_path / "fx.mp4"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=270x480:rate=30:duration=2",
+                        "-vf", chain + ",format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast", str(out)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+    def brightness(t):
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(out), "-frames:v", "1", "-f", "rawvideo",
+                              "-pix_fmt", "gray", "-"], capture_output=True).stdout
+        return np.frombuffer(raw, np.uint8).mean()
+    assert brightness(1.0) > brightness(0.8) + 20                         # the flash on the chorus hit

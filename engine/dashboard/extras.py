@@ -137,6 +137,9 @@ _EDITABLE: dict[str, tuple[str, type, Any]] = {
     "pre_drop_seconds": ("music.pre_drop_seconds", float, (0.0, 0.8)),
     "lyrics": ("captions.lyrics", str, ["auto", "on", "off"]),
     "promo_build_bars": ("music.promo_build_bars", int, (1, 8)),
+    "speed_ramps": ("music.speed_ramps", str, ["auto", "on", "off"]),
+    "beat_fx": ("music.beat_fx", str, ["auto", "on", "off"]),
+    "beat_fx_strength": ("music.beat_fx_strength", float, (0.3, 2.0)),
 }
 
 

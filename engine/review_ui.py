@@ -247,7 +247,9 @@ class ReviewPage:
         ctk.CTkLabel(self.extras, text="SONG EXTRAS  (this clip only, re-renders it)", font=G.font(12, "bold"), text_color=G.PINK,
                      anchor="w").grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 6))
         self.extra_vars: dict[str, ctk.StringVar] = {}
-        for n, (key, label) in enumerate((("dropout", "Silent beat before the chorus"), ("lyrics", "Lyrics on screen")), start=1):
+        extras = (("dropout", "Silent beat before the chorus"), ("lyrics", "Lyrics on screen"),
+                  ("ramps", "Speed ramps (slow-mo on the hit)"), ("fx", "Beat effects (pulse, flash, shake)"))
+        for n, (key, label) in enumerate(extras, start=1):
             ctk.CTkLabel(self.extras, text=label, font=G.font(13), text_color=G.TEXT, anchor="w").grid(
                 row=n, column=0, sticky="w", padx=4, pady=4)
             v = self.extra_vars[key] = ctk.StringVar(value="Auto")
@@ -255,7 +257,7 @@ class ReviewPage:
                                    command=lambda val, k=key: self.set_extra(k, val)).grid(row=n, column=1, sticky="e", padx=4, pady=4)
         self.extra_note = ctk.CTkLabel(self.extras, text="", font=G.font(11), text_color=G.MUTED, anchor="w", justify="left",
                                        wraplength=500)
-        self.extra_note.grid(row=3, column=0, columnspan=2, sticky="w", padx=4)
+        self.extra_note.grid(row=len(extras) + 1, column=0, columnspan=2, sticky="w", padx=4)
         self.chip_btns: dict[str, ctk.CTkButton] = {}
         for n, r in enumerate(review.REASONS, start=1):
             b = G.button(self.chips, f"{n}  {r}", lambda r=r: self.pick_reason(r), height=34, fg_color=G.CARD2)
@@ -404,6 +406,12 @@ class ReviewPage:
             notes.append(f"Silent beat: {d['start']:.2f}-{d['end']:.2f}s")
         elif music.get("dropout_note"):
             notes.append(f"Silent beat: {music['dropout_note']}")
+        r = music.get("ramps") or {}
+        if r:
+            bits = [x.replace("_", " ") for x in ("speed_up", "slow_mo") if r.get(x)]
+            if r.get("hits_on_downbeats"):
+                bits.append(f"{len(r['hits_on_downbeats'])} more hit(s) on the bar")
+            notes.append("Ramps: " + ", ".join(bits))
         self.extra_note.configure(text="   ·   ".join(notes))
 
     def set_extra(self, key: str, label: str) -> None:
@@ -422,7 +430,8 @@ class ReviewPage:
             m[key] = val
         lay["music"] = m
         self.db.update("clips", c["id"], {"layout_json": lay})
-        self._rerender(c, f"Re-rendering with {'the silent beat' if key == 'dropout' else 'lyrics'} {label.lower()}…")
+        name = {"dropout": "the silent beat", "lyrics": "lyrics", "ramps": "speed ramps", "fx": "beat effects"}[key]
+        self._rerender(c, f"Re-rendering with {name} {label.lower()}…")
 
     def _rerender(self, c, text: str) -> None:
         self.busy = True

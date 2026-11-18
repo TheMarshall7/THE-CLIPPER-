@@ -68,6 +68,9 @@ class MusicSettings(BaseModel):
     pre_drop_dropout: Literal["auto", "on", "off"] = "auto"   # silence for one beat before the chorus hits (auto: music promo only)
     promo_build_bars: int = 4          # music promo: bars of song before the chorus lands on the big moment
     pre_drop_seconds: float = 0.0      # length of that silence; 0 = one beat of the song (max 0.5 s)
+    speed_ramps: Literal["auto", "on", "off"] = "auto"   # faster into the hit, slow-mo after it (auto: music promo only)
+    beat_fx: Literal["auto", "on", "off"] = "auto"       # zoom pulse on the beat, flash/shake/colour on the chorus hit
+    beat_fx_strength: float = 1.0      # 0.3 subtle .. 2.0 wild
     ducking: Literal["smooth", "tight"] = "smooth"   # smooth: steady level while people talk on and off; tight: dips under every phrase
     duck_hold_s: float = 2.5           # smooth ducking: pauses shorter than this still count as talking
     talk_duck_db: Optional[float] = None   # how far the song dips under talking (dB); None = the volume preset's amount

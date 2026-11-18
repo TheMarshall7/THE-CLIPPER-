@@ -54,6 +54,13 @@ class RenderSpec:
     punch_at: Optional[float] = None         # output-timeline second to punch in
     gameplay_focus_x: float = 0.5
     gameplay_mode: Optional[str] = None
+    speeds: list[float] = field(default_factory=list)   # playback speed per kept piece (speed ramps); empty = all 1.0
+    fx: Optional[dict] = None                # beat-reactive picture (see beat_fx_chain)
+
+    def out_duration(self) -> float:
+        keep = self.keep or [(0.0, self.duration)]
+        sp = self.speeds or [1.0] * len(keep)
+        return sum((b - a) / s for (a, b), s in zip(keep, sp))
 
 
 def _lerp_expr(points: list[tuple[float, float]]) -> str:
@@ -112,10 +119,12 @@ def build_filter(spec: RenderSpec, cfg: VideoSettings) -> str:
 
     # ---- jump cuts on the video timeline (fps normalised first so concat is clean)
     keep = spec.keep or [(0.0, spec.duration)]
-    if len(keep) > 1:
+    speeds = spec.speeds or [1.0] * len(keep)
+    if len(keep) > 1 or any(s != 1.0 for s in speeds):
         chains.append(f"[0:v]fps={fps},split={len(keep)}" + "".join(f"[k{i}]" for i in range(len(keep))))
-        for i, (a, b) in enumerate(keep):
-            chains.append(f"[k{i}]trim=start={a:.4f}:end={b:.4f},setpts=PTS-STARTPTS[t{i}]")
+        for i, ((a, b), s) in enumerate(zip(keep, speeds)):
+            ramp = "" if s == 1.0 else f"/{s:.5f},fps={fps}"        # slow-mo repeats frames, speed-up drops them
+            chains.append(f"[k{i}]trim=start={a:.4f}:end={b:.4f},setpts=(PTS-STARTPTS){ramp}[t{i}]")
         chains.append("".join(f"[t{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=0[src]")
     else:
         chains.append(f"[0:v]fps={fps}[src]")
@@ -198,11 +207,15 @@ def build_filter(spec: RenderSpec, cfg: VideoSettings) -> str:
         gameplay("src", "game", W, H, ("fit_blur" if cfg.full_view_mode == "blur" else "fill") if spec.gameplay_mode is None else mode)
         punch_in("game", "stack", W, H, W / 2, H / 2)
 
-    tail = "[stack]format=yuv420p"
+    if spec.fx:
+        chains.append(f"[stack]{beat_fx_chain(spec.fx, W, H)}[stackfx]")
+        tail = "[stackfx]format=yuv420p"
+    else:
+        tail = "[stack]format=yuv420p"
     if spec.ass_file:
         tail += f",subtitles={spec.ass_file.name}"
     if cfg.progress_bar:
-        out_dur = sum(b - a for a, b in keep)
+        out_dur = spec.out_duration()
         chains.append(tail + "[pre]")
         chains.append(f"color=c={_hex(cfg.divider_color)}:s={W}x8:r={fps}[bar]")
         chains.append(f"[pre][bar]overlay=x='-w+w*t/{out_dur:.3f}':y={H - 8}:shortest=1[vout]")
@@ -211,10 +224,37 @@ def build_filter(spec: RenderSpec, cfg: VideoSettings) -> str:
     return ";".join(chains)
 
 
+def beat_fx_chain(fx: dict, W: int, H: int) -> str:
+    """Per-frame filters that move with the music (applied before the captions, so text stays still):
+      - zoom pulse on every beat while the song plays, a bigger one on each bar, both stronger once the chorus hits
+      - a short camera shake and a white flash on the chorus hit
+      - colour: a moodier, desaturated build-up, then a punchy saturated chorus"""
+    k = max(0.0, min(2.0, float(fx.get("strength", 1.0))))
+    s0, s1, hit, beat, bar = fx["start"], fx["end"], fx["hit"], fx["beat"], fx["bar"]
+    on = f"between(t,{s0:.3f},{s1:.3f})"
+    after = f"gte(t,{hit:.3f})"
+    # time since the last beat / bar line (the grid is anchored on the hit; +1000 bars keeps mod() positive)
+    since_beat = f"mod(t-{hit:.4f}+{1000 * bar:.4f},{beat:.5f})"
+    since_bar = f"mod(t-{hit:.4f}+{1000 * bar:.4f},{bar:.5f})"
+    pulse = (f"({on})*(0.5+0.5*{after})*({0.018 * k:.4f}*exp(-{since_beat}*14)+{0.03 * k:.4f}*exp(-{since_bar}*9))")
+    z = f"(1.045+{pulse})"
+    hitwin = f"between(t,{hit:.3f},{hit + 0.55:.3f})"
+    shake_x = f"{16 * k:.1f}*sin((t-{hit:.3f})*97)*exp(-(t-{hit:.3f})*7)*{hitwin}"
+    shake_y = f"{11 * k:.1f}*cos((t-{hit:.3f})*83)*exp(-(t-{hit:.3f})*7)*{hitwin}"
+    flash = f"{0.22 * min(k, 1.5):.3f}*exp(-(t-{hit:.3f})*10)*{hitwin}"
+    build = f"between(t,{s0:.3f},{hit:.3f})"
+    sat = f"if({build},{1 - 0.22 * min(k, 1.2):.3f},if({on}*{after},{1 + 0.15 * min(k, 1.5):.3f},1))"
+    con = f"if({on}*{after},{1 + 0.06 * min(k, 1.5):.3f},1)"
+    bri = f"({flash})-if({build},{0.035 * min(k, 1.2):.3f},0)"
+    return (f"scale=w='2*trunc({W}*{z}/2)':h='2*trunc({H}*{z}/2)':eval=frame,"
+            f"crop={W}:{H}:x='(iw-{W})/2+{shake_x}':y='(ih-{H})/2+{shake_y}',setsar=1,"
+            f"eq=brightness='{bri}':saturation='{sat}':contrast='{con}':eval=frame")
+
+
 def render(spec: RenderSpec, cfg: VideoSettings) -> Path:
     spec.out.parent.mkdir(parents=True, exist_ok=True)
     fgraph = build_filter(spec, cfg)
-    out_dur = sum(b - a for a, b in (spec.keep or [(0.0, spec.duration)]))
+    out_dur = spec.out_duration()
     cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-y", "-v", "error",
            "-ss", f"{spec.src_start:.3f}", "-t", f"{spec.duration:.3f}", "-i", str(spec.src)]
     if spec.audio:

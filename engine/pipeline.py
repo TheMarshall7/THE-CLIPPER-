@@ -746,9 +746,12 @@ class Engine:
         # 4. music: conflicts -> eligibility -> top-3 matches -> placement
         music = self.plan_music(clip, stream, streamer, cand, start, end, keep_abs, words, words_out, speech_out,
                                 payoff_out, out_dur, transcript)
+        speeds = None
         if music.get("chosen"):
-            keep_abs, keep = self._sync_to_song(clip_id, stream["id"], prof, music, keep_abs, keep, words, words_out,
-                                                start, payoff_abs)
+            tl = self._sync_to_song(clip_id, stream["id"], prof, music, keep_abs, keep, words, words_out,
+                                    start, payoff_abs, payoff_out, out_dur)
+            keep_abs, keep, speeds = tl["keep_abs"], tl["keep"], tl["speeds"]
+            words_out, speech_out, payoff_out, out_dur = tl["words_out"], tl["speech_out"], tl["payoff_out"], tl["out_dur"]
         meta = loads(clip["metadata_json"])
         if meta is None or regenerate_meta:
             meta = gen_meta({
@@ -781,7 +784,8 @@ class Engine:
                 music["blocked"] = f"source-music removal failed: {e}"[:200]
                 chosen = music["chosen"] = None
         if audio_src:
-            tracks = self.render_audio(audio_src, src_start, dur, keep, speech_out, words_out, cdir, chosen, voice_only=stem)
+            tracks = self.render_audio(audio_src, src_start, dur, keep, speech_out, words_out, cdir, chosen, voice_only=stem,
+                                       speeds=speeds)
             if chosen and not tracks.get("mixed"):
                 music["blocked"] = tracks.get("music_dropped", "mix failed intelligibility check")
                 chosen = music["chosen"] = None
@@ -829,13 +833,18 @@ class Engine:
         if layout.get("layout") == "split" and self.s.video.face_tracking and layout.get("face_box") and not layout.get("manual"):
             try:      # follow the face through the clip; on any problem fall back to the fixed crop
                 layout["face_track"] = track_face(src.resolve(), src_start, dur, keep, layout["face_box"])
+                if speeds and any(x != 1.0 for x in speeds):      # face positions onto the speed-ramped timeline
+                    from engine.music import promo
+                    pcs = [(a, b, sp) for (a, b), sp in zip(keep, speeds)]
+                    layout["face_track"] = [[promo.retime(t, keep, pcs) or t, cx, cy] for t, cx, cy in layout["face_track"]]
             except Exception as e:
                 self.log(f"clip {clip_id}: face tracking skipped: {e}", stream["id"], "warning")
         spec = RenderSpec(src=src.resolve(), src_start=src_start, duration=dur, src_w=pinfo.width, src_h=pinfo.height,
                           src_fps=pinfo.fps, layout=layout, ass_file=ass_file, out=out, audio=main_audio, keep=keep,
                           punch_at=payoff_out if layout.get("layout") in ("split", "fullcam") else None,
                           gameplay_focus_x=float(stored.get("gameplay_focus_x", 0.5)),
-                          gameplay_mode=stored.get("gameplay_mode"))
+                          gameplay_mode=stored.get("gameplay_mode"), speeds=list(speeds or []),
+                          fx=chosen.get("fx") if chosen else None)
         render(spec, self.s.video)
         # AAC encoding can overshoot the WAV's true peak on hard transients (gunfire, explosions):
         # measure the real file and, if needed, re-limit with that much extra headroom and swap the audio in
@@ -847,7 +856,7 @@ class Engine:
                     break
                 tracks = self.render_audio(
                     audio_src, src_start, dur, keep, speech_out, words_out, cdir, chosen,
-                    tp=tp_target - (tp - tp_target) - 0.3, check=False, voice_only=stem) if audio_src else tracks
+                    tp=tp_target - (tp - tp_target) - 0.3, check=False, voice_only=stem, speeds=speeds) if audio_src else tracks
                 main_audio = Path(tracks["mixed"]) if chosen and tracks.get("mixed") else Path(tracks["clean"])
                 tmp = out.with_name("clip_tp.mp4")
                 mux_audio(out, main_audio, tmp, self.s.video.audio_bitrate)
@@ -906,6 +915,7 @@ class Engine:
             qc["checks"]["loop_ending"] = loop
         layout.update({k: v for k, v in stored.items() if k in ("gameplay_focus_x", "gameplay_mode", "music", "_folder", "recipe")})
         layout["_keep"] = keep
+        layout["_speeds"] = list(speeds) if speeds else None
         fields = {"status": "rendered", "video_path": str(out), "thumb_path": str(thumb), "layout_json": layout,
                   "metadata_json": meta, "hooks_json": hooks, "captions_json": {"words": len(words_out), "duration": out_dur},
                   "qc_json": qc, "publish_ready": qc["publish_ready"],
@@ -1119,15 +1129,27 @@ class Engine:
         return res
 
     def _sync_to_song(self, clip_id: int, stream_id: int, prof, music: dict, keep_abs, keep, words, words_out,
-                      start: float, payoff_abs: float):
-        """Lock the edit to the song: jump cuts onto its beat grid, and a one-beat dropout right before the chorus hits.
-        Neither moves the words, the payoff or the chorus downbeat (see promo.snap_cuts_to_beats)."""
+                      start: float, payoff_abs: float, payoff_out: float, out_dur: float) -> dict:
+        """Lock the edit to the song:
+          1. jump cuts onto its beat grid (moves nothing else)
+          2. speed ramps: faster into the hit, slow-mo after it, follow-up hits nudged onto bar lines (whole beats only)
+          3. a one-beat dropout right before the chorus hits
+          4. beat-reactive picture (zoom pulse, flash, shake, colour)
+        Returns the clip's timeline, which changes when the footage is sped up or slowed down."""
         from engine.music import promo
         from engine.music.library import effective_analysis
         chosen, ms = music["chosen"], self.s.music
+        speech_out = [(w["start"], w["end"]) for w in words_out]
+        tl = {"keep_abs": keep_abs, "keep": keep, "speeds": None, "words_out": words_out, "speech_out": speech_out,
+              "payoff_out": payoff_out, "out_dur": out_dur}
         row = self.db.one("SELECT * FROM songs WHERE id=?", (chosen["song_id"],))
         if row is None:
-            return keep_abs, keep
+            return tl
+        row_c = self.db.one("SELECT layout_json FROM clips WHERE id=?", (clip_id,))
+        own = ((loads(row_c["layout_json"], {}) or {}).get("music") or {}) if row_c else {}
+
+        def wanted(key: str, setting: str) -> bool:      # this clip's own switch, else the setting
+            return own[key] if own.get(key) is not None else promo.wants(setting, prof.song_first)
         a, pl = effective_analysis(row), chosen["placement"]
         if ms.beat_sync_cuts and len(keep_abs) > 1:
             new_keep, shifts = promo.snap_cuts_to_beats(keep_abs, promo.out_beats(a, pl), words,
@@ -1136,24 +1158,83 @@ class Engine:
                 keep_abs, keep = new_keep, [(x - start, y - start) for x, y in new_keep]
                 music["beat_sync"] = {"cuts_moved": len(shifts), "max_shift_s": max(abs(d) for d in shifts)}
                 self.log(f"clip {clip_id}: {len(shifts)} cuts moved onto the beat", stream_id)
+        tl["keep_abs"], tl["keep"] = keep_abs, keep
+        # 2. speed ramps (only when the chorus is synced to a hit)
+        sync = pl.get("payoff_sync")
+        if sync and wanted("ramps", ms.speed_ramps) and float(a.get("bpm") or 0) > 0:
+            beat = 60.0 / float(a["bpm"])
+            hit_src = promo.cut_to_src(float(sync["clip_time"]), keep_abs)
+            if hit_src is not None:
+                pieces, info = promo.ramp_plan(keep_abs, hit_src, beat, words)
+                hit_out = promo.src_to_out(hit_src, pieces)
+                after = info.get("slow_mo", {}).get("end", hit_src)
+                pieces, nudged = promo.nudge_hits(pieces, self._followup_hits(stream_id, after, keep_abs[-1][1]), hit_out,
+                                                  float(a.get("bar_s") or 4 * beat), words, after)
+                if info or nudged:
+                    tl = self._apply_ramps(tl, pieces, start, chosen, music)
+                    pl = chosen["placement"]
+                    music["ramps"] = {**info, "hits_on_downbeats": nudged}
+                    self.log(f"clip {clip_id}: speed ramps {', '.join(info) or 'none'}"
+                             + (f", {len(nudged)} more hit(s) landed on a bar" if nudged else ""), stream_id)
         recipe = self.recipe_for(clip_id) or {}
         r_len = (recipe.get("audio") or {}).get("pre_payoff_dropout_s")
-        row_c = self.db.one("SELECT layout_json FROM clips WHERE id=?", (clip_id,))
-        forced = ((loads(row_c["layout_json"], {}) or {}).get("music") or {}).get("dropout") if row_c else None
+        forced = own.get("dropout")
         want = forced if forced is not None else (
             ms.pre_drop_dropout != "off" and bool(r_len or promo.wants(ms.pre_drop_dropout, prof.song_first)))
         if want:
             length = float(r_len) if r_len else (ms.pre_drop_seconds or None)
             win = promo.dropout_window(a, pl, length)
             # never silence a line the viewer has to hear (unless you switched the drop on for this clip yourself)
-            if win and (forced or promo.talk_share(promo.meaningful(words_out), win[0], win[1]) < 0.2):
+            if win and (forced or promo.talk_share(promo.meaningful(tl["words_out"]), win[0], win[1]) < 0.2):
                 chosen["dropout"] = list(win)
                 music["dropout"] = {"start": win[0], "end": win[1], "by": "you" if forced else "auto"}
             elif not win:
                 music["dropout_note"] = "no chorus drop in this clip to go silent before"
         elif forced is False:
             music["dropout_note"] = "drop turned off for this clip"
-        return keep_abs, keep
+        # 4. the picture moves with the music
+        if wanted("fx", ms.beat_fx):
+            fx = promo.fx_spec(a, pl, ms.beat_fx_strength)
+            if fx:
+                chosen["fx"] = music["fx"] = fx
+        return tl
+
+    def _apply_ramps(self, tl: dict, pieces, start: float, chosen: dict, music: dict) -> dict:
+        """Move everything that lives on the clip's timeline onto the speed-ramped one."""
+        from engine.music import promo
+        ka = tl["keep_abs"]
+
+        def rt(t):
+            return promo.retime(t, ka, pieces)
+        words_out = []
+        for w in tl["words_out"]:
+            a0, b0 = rt(w["start"]), rt(w["end"])
+            if a0 is not None:
+                words_out.append({**w, "start": a0, "end": b0 if b0 is not None else a0 + 0.25})
+        new_dur = promo.out_len(pieces)
+        chosen["placement"] = promo.resync_placement(chosen["placement"], ka, pieces, new_dur)
+        if (music.get("spot") or {}).get("drop") is not None and chosen["placement"].get("payoff_sync"):
+            music["spot"]["drop"] = chosen["placement"]["payoff_sync"]["clip_time"]
+        music["conflicts_out"] = [(rt(x) or x, rt(y) or y) for x, y in music.get("conflicts_out", [])]
+        new_abs = [(x, y) for x, y, _ in pieces]
+        pay = rt(tl["payoff_out"])
+        return {"keep_abs": new_abs, "keep": [(x - start, y - start) for x, y in new_abs], "speeds": [sp for _, _, sp in pieces],
+                "words_out": words_out, "speech_out": [(w["start"], w["end"]) for w in words_out],
+                "payoff_out": pay if pay is not None else tl["payoff_out"], "out_dur": new_dur}
+
+    def _followup_hits(self, stream_id: int, after_src: float, end_src: float, top: int = 4) -> list[float]:
+        """Source times where the next big hits start (after the main one), for landing them on bar lines."""
+        from engine.music import promo
+        try:
+            _, ex = audio_an.load(self.s.stream_dir(stream_id) / "features.npz")
+        except (OSError, KeyError):
+            return []
+        t, sc = ex["t"], ex["score"]
+        sel = np.flatnonzero((t > after_src + 0.8) & (t < end_src - 0.5) & (sc > 0.5))
+        peaks = [i for i in sel if sc[i] >= sc[max(0, i - 1)] and sc[i] >= sc[min(sc.size - 1, i + 1)]]
+        peaks = sorted(peaks, key=lambda i: -sc[i])[:top]
+        wav = self.s.stream_dir(stream_id) / "audio.wav"
+        return sorted(promo.refine_onset(wav, float(t[i])) for i in peaks)
 
     def _music_spot(self, stream, start, end, keep_abs, words_out, conf_out, out_dur, category, ms) -> Optional[dict]:
         """Where the song should land: a big non-speech moment (AI judgment first, then rules). None if there isn't one."""
@@ -1177,7 +1258,7 @@ class Engine:
 
     def render_audio(self, src: Path, src_start: float, dur: float, keep, speech_out, words_out, cdir: Path,
                      chosen: Optional[dict], tp: Optional[float] = None, check: bool = True,
-                     voice_only: Optional[Path] = None) -> dict:
+                     voice_only: Optional[Path] = None, speeds: Optional[list[float]] = None) -> dict:
         v, ms = self.s.video, self.s.music
         tp = v.true_peak_db if tp is None else tp
         plan = None
@@ -1192,7 +1273,7 @@ class Engine:
                             hold_s=ms.duck_hold_s if ms.ducking == "smooth" else 0.0,
                             bed_db=chosen.get("bed_override", pre["bed_db"]),
                             dropout=tuple(chosen["dropout"]) if chosen.get("dropout") else None)
-        res = render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only)
+        res = render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only, speeds)
         if plan is None or len(words_out) < 4 or not check:
             return res
         # intelligibility check (M7): transcribe clean vs mixed; lower music and retry if words get lost
@@ -1206,7 +1287,8 @@ class Engine:
                     return res
                 plan.level_db -= 4.0
                 plan.duck_db += 3.0
-                res.update(render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only))
+                res.update(render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only,
+                                         speeds))
             if chosen.get("song_first"):         # music promo: the song is the point; keep it at the reduced level
                 res["intelligibility"]["kept_for_promo"] = True
                 return res

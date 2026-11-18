@@ -40,14 +40,27 @@ def decode(path: Path, start: float, dur: float) -> np.ndarray:
     return a[:need]
 
 
-def apply_cuts(a: np.ndarray, keep: list[tuple[float, float]], xfade_ms: float = 8.0) -> np.ndarray:
-    """Concatenate kept intervals (seconds relative to the clip start) with short crossfades."""
-    if len(keep) == 1 and keep[0][0] <= 1e-6 and abs(keep[0][1] * SR - a.shape[0]) < 2:
+def _respeed(seg: np.ndarray, speed: float) -> np.ndarray:
+    """Play a piece of game audio faster or slower (like tape: slow-mo also drops the pitch, which suits an impact)."""
+    if abs(speed - 1.0) < 1e-4 or seg.shape[0] < 4:
+        return seg
+    n = max(2, int(round(seg.shape[0] / speed)))
+    src = np.linspace(0, seg.shape[0] - 1, n)
+    idx = np.arange(seg.shape[0])
+    return np.stack([np.interp(src, idx, seg[:, c]) for c in range(seg.shape[1])], axis=1).astype(np.float32)
+
+
+def apply_cuts(a: np.ndarray, keep: list[tuple[float, float]], xfade_ms: float = 8.0,
+               speeds: Optional[list[float]] = None) -> np.ndarray:
+    """Concatenate kept intervals (seconds relative to the clip start) with short crossfades.
+    speeds: playback speed per interval (speed ramps); None = all normal speed."""
+    speeds = list(speeds) if speeds else [1.0] * len(keep)
+    if len(keep) == 1 and keep[0][0] <= 1e-6 and abs(keep[0][1] * SR - a.shape[0]) < 2 and speeds[0] == 1.0:
         return a
     x = int(xfade_ms / 1000 * SR)
     out = None
-    for k0, k1 in keep:
-        seg = a[int(round(k0 * SR)): int(round(k1 * SR))]
+    for (k0, k1), sp in zip(keep, speeds):
+        seg = _respeed(a[int(round(k0 * SR)): int(round(k1 * SR))], sp)
         if out is None or seg.shape[0] < 2 * x or out.shape[0] < x:
             out = seg.copy() if out is None else np.vstack([out, seg])
             continue
@@ -261,13 +274,14 @@ def _true_peak_limit(y: np.ndarray, ceiling: float, sr: int, release_ms: float =
 
 def render_tracks(src: Path, clip_start: float, clip_dur: float, keep: list[tuple[float, float]],
                   speech_out: list[tuple[float, float]], out_dir: Path, lufs: float, tp: float,
-                  plan: Optional[SongPlan] = None, voice_only: Optional[Path] = None) -> dict:
+                  plan: Optional[SongPlan] = None, voice_only: Optional[Path] = None,
+                  speeds: Optional[list[float]] = None) -> dict:
     """Write clean.wav (always) and mixed.wav (when a song plan is given). Returns paths + stats.
 
     `voice_only`: a Demucs voice stem covering exactly the clip window; the song is mixed over it instead
     of the original audio (source music removed), while clean.wav keeps the original sound."""
-    voice = apply_cuts(decode(src, clip_start, clip_dur), keep)
-    base = apply_cuts(decode(voice_only, 0.0, clip_dur), keep) if voice_only is not None else voice
+    voice = apply_cuts(decode(src, clip_start, clip_dur), keep, speeds=speeds)
+    base = apply_cuts(decode(voice_only, 0.0, clip_dur), keep, speeds=speeds) if voice_only is not None else voice
     out_dir.mkdir(parents=True, exist_ok=True)
     res: dict = {"duration": voice.shape[0] / SR}
     tmp = write_wav(out_dir / "_clean_raw.wav", voice)

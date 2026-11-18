@@ -251,6 +251,13 @@ def ai_brief(title: str, artist: str, a: dict, build_s: float, after_s: float, s
         parts.append("The song dips under each spoken phrase and comes back up in between.")
     if wants(cs.lyrics, song_first):
         parts.append("The song's lyrics appear on screen in the top part of the frame after the opening title card.")
+    if wants(ms.speed_ramps, song_first):
+        parts.append("The footage speeds up (1.5x) for the 3 beats before the hit and plays in slow motion (0.5x) for the beat "
+                     "after it, and later big hits are nudged a few percent faster or slower so they land on a bar line: "
+                     "moments with more than one big hit, and a hit worth seeing in slow motion, work best.")
+    if wants(ms.beat_fx, song_first):
+        parts.append("The picture pulses (a small zoom) on every beat, and on the chorus hit it flashes white and shakes; "
+                     "the build-up is darker and less colourful, the chorus punchier.")
     parts.append("Judge each moment by how well it carries the song: best is a single dominant, clearly visible hit with an "
                  "aftermath that still looks good under the chorus (wreckage, a getaway, a reaction) and no line the viewer must "
                  "hear. Score low when the point of the moment is something said, when several equal hits compete, when the "
@@ -276,3 +283,162 @@ def song_lyrics(db: Database, song_id: int) -> list[dict]:
 
 __all__ = ["choose_song", "window_lengths", "biggest_event", "reshape", "music_fit", "blend", "out_beats",
            "snap_cuts_to_beats", "dropout_window", "lyric_lines", "wants", "song_lyrics"]
+
+
+# ------------------------------------------------------------------ speed ramps
+# A clip's timeline goes  source -> cut timeline (jump cuts) -> ramped timeline (speed changes).
+# "pieces" are the kept source intervals, each with its own playback speed: [(a, b, speed)] (seconds, source time).
+# Every ramp adds or removes a WHOLE number of beats, so everything after it stays on the song's beat grid.
+
+def pieces_from_keep(keep_abs: list[tuple[float, float]]) -> list[tuple[float, float, float]]:
+    return [(float(a), float(b), 1.0) for a, b in keep_abs]
+
+
+def out_len(pieces) -> float:
+    return sum((b - a) / s for a, b, s in pieces)
+
+
+def src_to_out(t: float, pieces) -> Optional[float]:
+    """Source time -> ramped output time (None if t was cut out)."""
+    acc = 0.0
+    for a, b, s in pieces:
+        if t < a - 1e-6:
+            return None
+        if t <= b + 1e-6:
+            return acc + (min(t, b) - a) / s
+        acc += (b - a) / s
+    return None
+
+
+def cut_to_src(t: float, keep_abs) -> Optional[float]:
+    """Cut-timeline time -> source time."""
+    acc = 0.0
+    for a, b in keep_abs:
+        if t <= acc + (b - a) + 1e-6:
+            return a + (t - acc)
+        acc += b - a
+    return None
+
+
+def retime(t: Optional[float], keep_abs, pieces) -> Optional[float]:
+    """Cut-timeline time -> ramped timeline time."""
+    if t is None:
+        return None
+    s = cut_to_src(t, keep_abs)
+    return None if s is None else src_to_out(s, pieces)
+
+
+def _split(pieces, lo: float, hi: float, speed: float):
+    """Give source range [lo, hi] the playback `speed`. Returns None unless the range sits inside ONE kept piece
+    that still plays at normal speed (ramps never cross a jump cut or another ramp)."""
+    out = []
+    done = False
+    for a, b, s in pieces:
+        if not done and a - 1e-6 <= lo and hi <= b + 1e-6 and s == 1.0:
+            if lo - a > 0.02:
+                out.append((a, lo, 1.0))
+            out.append((lo, hi, speed))
+            if b - hi > 0.02:
+                out.append((hi, b, 1.0))
+            done = True
+        else:
+            out.append((a, b, s))
+    return out if done else None
+
+
+def ramp_plan(keep_abs, hit_src: float, beat: float, words: list[dict], pre_speed: float = 1.5,
+              slow_speed: float = 0.5) -> tuple[list[tuple[float, float, float]], dict]:
+    """Speed up into the hit, slow-mo right after it.
+      speed-up: the 3 beats of footage before the hit play at 1.5x (one beat shorter: the build-up feels faster)
+      slow-mo:  the beat of footage after the hit plays at 0.5x (the impact hangs for two beats)
+    Each is skipped if someone is saying something there or it would cross a jump cut."""
+    pieces = pieces_from_keep(keep_abs)
+    spans = meaningful(words)
+    info: dict = {}
+    pre_len = beat / (1 - 1 / pre_speed)               # footage that loses exactly one beat at pre_speed
+    slow_len = beat / (1 / slow_speed - 1)             # footage that gains exactly one beat at slow_speed
+    lo, hi = hit_src - pre_len, hit_src
+    if talk_share(spans, lo, hi) < 0.2:
+        p = _split(pieces, lo, hi, pre_speed)
+        if p:
+            pieces, info["speed_up"] = p, {"start": round(lo, 3), "end": round(hi, 3), "speed": pre_speed}
+    lo, hi = hit_src, hit_src + slow_len
+    if talk_share(spans, lo, hi) < 0.2:
+        p = _split(pieces, lo, hi, slow_speed)
+        if p:
+            pieces, info["slow_mo"] = p, {"start": round(lo, 3), "end": round(hi, 3), "speed": slow_speed}
+    return pieces, info
+
+
+def nudge_hits(pieces, events_src: list[float], hit_out: float, bar: float, words: list[dict],
+               after_src: float, max_change: float = 0.12, limit: int = 2) -> tuple[list, list[dict]]:
+    """Land the next big hits on a downbeat too: the footage leading up to a hit plays a few percent faster or slower
+    so the hit lands on the nearest bar line, and the footage right after it makes the same change back, so nothing
+    later moves. Only where nobody talks and inside one uncut piece; speed changes stay within +-max_change."""
+    spans = meaningful(words)
+    done: list[dict] = []
+    anchor = after_src
+    for e in sorted(x for x in events_src if x > after_src + 0.8):
+        if len(done) >= limit:
+            break
+        t = src_to_out(e, pieces)
+        if t is None:
+            continue
+        n = round((t - hit_out) / bar)
+        if n < 1:
+            continue
+        delta = hit_out + n * bar - t                    # + = the hit needs to land later
+        lead = e - anchor
+        piece = next((p for p in pieces if p[0] - 1e-6 <= anchor and e + lead <= p[1] + 1e-6 and p[2] == 1.0), None)
+        if piece is None or abs(delta) < 0.02 or talk_share(spans, anchor, e + lead) > 0.2:
+            continue
+        s1 = lead / (lead + delta)                       # stretch the run-up by delta ...
+        s2 = lead / (lead - delta)                       # ... and squeeze the same footage after the hit back
+        if not (1 - max_change <= s1 <= 1 + max_change and 1 - max_change <= s2 <= 1 + max_change):
+            continue
+        p1 = _split(pieces, anchor, e, s1)
+        p2 = _split(p1, e, e + lead, s2) if p1 else None
+        if not p2:
+            continue
+        pieces = p2
+        done.append({"hit_src": round(e, 3), "lands_at": round(hit_out + n * bar, 3), "moved_s": round(delta, 3),
+                     "speeds": [round(s1, 3), round(s2, 3)]})
+        anchor = e + lead
+    return pieces, done
+
+
+def resync_placement(pl: dict, keep_abs, pieces, new_dur: float) -> dict:
+    """Move a song placement onto the ramped timeline. The song itself is never sped up: it keeps its sync to the hit
+    (the chorus downbeat still lands on it), starting a little further into the song if the build-up got shorter."""
+    p = dict(pl)
+    sync = p.get("payoff_sync")
+    clip_in = retime(p["clip_in"], keep_abs, pieces)
+    clip_in = p["clip_in"] if clip_in is None else clip_in
+    if sync:
+        hit = retime(sync["clip_time"], keep_abs, pieces)
+        hit = sync["clip_time"] if hit is None else hit
+        song_in = float(sync["song_downbeat"]) - (hit - clip_in)
+        p["payoff_sync"] = {**sync, "clip_time": round(hit, 4)}
+    else:
+        song_in = p["song_in"]
+    if song_in < 0:
+        clip_in -= song_in
+        song_in = 0.0
+    song_out = min(float(pl["song_out"]), song_in + (new_dur - clip_in))   # never past the part you marked
+    p.update(song_in=round(song_in, 4), clip_in=round(clip_in, 4), song_out=round(song_out, 4),
+             clip_out=round(clip_in + song_out - song_in, 4))
+    return p
+
+
+# ------------------------------------------------------------------ beat-reactive picture
+def fx_spec(a: dict, pl: dict, strength: float = 1.0) -> Optional[dict]:
+    """What the picture does with the music (all on the final timeline): a zoom pulse on every beat (bigger on the
+    bar), and when the chorus hits a white flash, a short camera shake and a colour change from a moody build-up
+    to a punchy, saturated chorus."""
+    sync = pl.get("payoff_sync")
+    bpm = float(a.get("bpm") or 0)
+    if not sync or bpm <= 0:
+        return None
+    beat = 60.0 / bpm
+    return {"start": float(pl["clip_in"]), "end": float(pl["clip_out"]), "hit": float(sync["clip_time"]),
+            "beat": round(beat, 5), "bar": round(float(a.get("bar_s") or 4 * beat), 5), "strength": float(strength)}

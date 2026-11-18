@@ -538,7 +538,11 @@ class App(ctk.CTk):
         add(f, "Song lyrics on screen", "lyrics", "menu", aon[cs.lyrics], list(aon.values()))
         add(f, "Build-up before the chorus (bars)", "promo_build_bars", "menu", str(ms.promo_build_bars),
             [str(i) for i in range(1, 9)])
-        ctk.CTkLabel(f, text="Each clip can override the silent beat and lyrics in Review (Song extras).", font=font(11),
+        add(f, "Speed ramps (faster into the hit, slow-mo after)", "speed_ramps", "menu", aon[ms.speed_ramps], list(aon.values()))
+        add(f, "Beat effects (zoom pulse, flash, shake, colour)", "beat_fx", "menu", aon[ms.beat_fx], list(aon.values()))
+        fxs = {0.5: "Subtle", 1.0: "Normal", 1.5: "Strong", 2.0: "Wild"}
+        add(f, "Beat effect strength", "beat_fx_strength", "menu", fxs.get(ms.beat_fx_strength, "Normal"), list(fxs.values()))
+        ctk.CTkLabel(f, text="Each clip can override these in Review (Song extras).", font=font(11),
                      text_color=MUTED, anchor="w", wraplength=480, justify="left").grid(
             row=f.n, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 12))
         f.n += 1
@@ -631,6 +635,9 @@ class App(ctk.CTk):
             cfg.music.pre_drop_seconds = float(gap)
             c.lyrics = next((k for k, t in aon.items() if t == vars_["lyrics"].get()), "auto")
             cfg.music.promo_build_bars = int(vars_["promo_build_bars"].get())
+            cfg.music.speed_ramps = next((k for k, t in aon.items() if t == vars_["speed_ramps"].get()), "auto")
+            cfg.music.beat_fx = next((k for k, t in aon.items() if t == vars_["beat_fx"].get()), "auto")
+            cfg.music.beat_fx_strength = next((k for k, t in fxs.items() if t == vars_["beat_fx_strength"].get()), 1.0)
             v = cfg.video
             v.cam_ratio = float(cam) / 100
             v.crf = {"Standard": 20, "High (sharper, larger files)": 18, "Maximum (sharpest, largest files)": 16}.get(vars_["quality"].get(), 18)

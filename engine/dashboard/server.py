@@ -383,6 +383,8 @@ class ClipMusicReq(BaseModel):
     volume: Optional[str] = None      # subtle | balanced | featured | trailer
     dropout: Optional[bool] = None    # silent beat before the chorus: None = follow Settings
     lyrics: Optional[bool] = None     # song lyrics on screen: None = follow Settings
+    ramps: Optional[bool] = None      # speed ramps around the hit: None = follow Settings
+    fx: Optional[bool] = None         # beat-reactive picture: None = follow Settings
 
 
 @app.post("/api/clips/{clip_id}/music")
@@ -420,7 +422,7 @@ def clip_music(clip_id: int, req: ClipMusicReq) -> dict:
         lay["music"]["ignore_detected"] = True
     if req.volume in ("subtle", "balanced", "featured", "trailer") and not req.off:
         lay["music"]["volume"] = req.volume
-    for k in ("dropout", "lyrics"):
+    for k in ("dropout", "lyrics", "ramps", "fx"):
         if getattr(req, k) is not None and not req.off:
             lay["music"][k] = getattr(req, k)
     _db.update("clips", clip_id, {"layout_json": lay})

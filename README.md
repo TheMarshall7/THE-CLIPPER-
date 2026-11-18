@@ -133,10 +133,17 @@ Pick **Video type → Music promo (song first)** on New job (CLI: `--type music_
   someone says something there. A recipe's `pre_payoff_dropout_s` sets its length on any clip.
 - **Lyrics on screen** (`captions.lyrics`: auto/on/off): the song's timed lyrics show where the hook card sits, after it. Needs
   lyrics from song analysis. The song credit tag stays up for as long as the song plays.
-- **Turn them on/off**: Settings → *Music promo (song first)* has the silent beat (Auto/On/Off), its length, lyrics on screen
-  (Auto/On/Off) and the build-up length. Each clip can override the silent beat and lyrics in Review → *Song extras*
+- **Turn them on/off**: Settings → *Music promo (song first)* has speed ramps, beat effects + strength, the silent beat (Auto/On/Off), its length, lyrics on screen
+  (Auto/On/Off) and the build-up length. Each clip can override ramps, effects, the silent beat and lyrics in Review → *Song extras*
   (Auto follows Settings; changing it re-renders that clip). Web dashboard: Settings → *Music promo*; API
-  `POST /api/clips/{id}/music` takes `dropout` / `lyrics` true/false.
+  `POST /api/clips/{id}/music` takes `dropout` / `lyrics` / `ramps` / `fx` true/false.
+- **Speed ramps** (`music.speed_ramps`: auto/on/off): the 3 beats of footage before the hit play at 1.5x, the beat after it
+  in slow motion (0.5x), and up to 2 later big hits are nudged a few percent faster/slower (max 12%) so they land on a bar
+  line. Every ramp adds or removes a whole beat, so the edit stays on the beat; the song itself is never sped up, and the
+  chorus still lands on the hit. Skipped where someone is talking or across a jump cut.
+- **Beat effects** (`music.beat_fx`: auto/on/off, `music.beat_fx_strength` 0.3-2): a small zoom pulse on every beat (bigger
+  on the bar), a white flash and short shake when the chorus hits, and a darker build-up that turns punchy and saturated on the
+  chorus. Captions are drawn after the effects, so text stays still.
 - **Song under talking** (Settings → Music, every clip with a song): *Smooth* (default) keeps the song at one steady lower level
   while people talk on and off (pauses shorter than `music.duck_hold_s`, 2.5 s, still count as talking), instead of jumping up in
   every gap. *Tight* is the old per-phrase dip. *How far the song dips under talking* sets the depth (`music.talk_duck_db`).
