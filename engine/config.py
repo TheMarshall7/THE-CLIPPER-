@@ -160,6 +160,7 @@ class TranscriptionSettings(BaseModel):
 class ClipSettings(BaseModel):
     allowed_durations: list[int] = [15, 30, 45, 60, 90]
     min_duration: float = 15.0
+    min_length: float = 30.0          # YOUR minimum clip length (s), after dead air is cut. Wins over the video type's own minimum.
     max_duration: float = 90.0
     target_min: float = 30.0
     target_max: float = 60.0
@@ -184,7 +185,9 @@ class VideoSettings(BaseModel):
     max_fps: int = 60
     gameplay_mode: Literal["fill", "fit_blur"] = "fill"
     encoder: Literal["auto", "libx264", "h264_nvenc"] = "auto"
-    crf: int = 20
+    crf: int = 18                     # lower = sharper + bigger files (16 maximum, 18 high, 20 standard)
+    max_cam_zoom: float = 2.5         # a camera blown up more than this looks blurry: auto layout drops a too-small cam panel
+    full_view_mode: Literal["blur", "fill"] = "blur"   # whole-frame clips: full picture over a blurred backdrop, or zoom to fill
     preset: str = "medium"
     audio_bitrate: str = "192k"
     loudness_lufs: float = -14.0
@@ -206,6 +209,8 @@ class VideoSettings(BaseModel):
 
 class ReviewSettings(BaseModel):
     """Rules for rejecting clips automatically (0 / off = rule not used)."""
+    learn: bool = True                # your Keep / Post / Reject swipes teach the engine what to pick (needs ~12 decisions)
+    learn_strength: float = 1.0       # 0.5 gentle, 1 normal, 1.5 strong
     auto_run: bool = False            # run the rules on every new batch as soon as it is rendered
     min_score: float = 0.0
     min_seconds: float = 0.0

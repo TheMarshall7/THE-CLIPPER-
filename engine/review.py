@@ -48,11 +48,28 @@ def decide(db: Database, clip_id: int, decision: str, reason: Optional[str] = No
                 prev["posted_platform"] if prev else None, ai_rating, ai_note, now))
     db.execute("UPDATE clips SET approval=?, updated_at=? WHERE id=?",
                ("rejected" if decision == "reject" else "approved", now, clip_id))
+    if not auto:
+        _relearn(db)
+
+
+def _relearn(db: Database) -> None:
+    try:                                  # learning must never get in the way of swiping
+        from engine import learn
+        learn.retrain(db)
+    except Exception:
+        pass
 
 
 def undo(db: Database, clip_id: int) -> None:
     db.execute("DELETE FROM clip_review WHERE clip_id=?", (clip_id,))
     db.execute("UPDATE clips SET approval='pending', updated_at=? WHERE id=?", (time.time(), clip_id))
+    _relearn(db)
+
+
+def last_manual(db: Database) -> Optional[int]:
+    """The clip you decided on most recently (by hand), so Undo still works after leaving the tab or restarting."""
+    r = db.one("SELECT clip_id FROM clip_review WHERE auto=0 ORDER BY decided_at DESC LIMIT 1")
+    return r["clip_id"] if r else None
 
 
 def mark_posted(db: Database, clip_id: int, platform: str = "") -> None:
@@ -138,6 +155,15 @@ def insights(db: Database) -> list[str]:
     top = db.one("SELECT reason, COUNT(*) n FROM clip_review WHERE decision='reject' AND auto=0 GROUP BY reason ORDER BY n DESC LIMIT 1")
     if top:
         lines.append(f"Most common reject reason: {top['reason']} ({top['n']})")
+    try:
+        from engine import learn
+        s = learn.status(db)
+        if s["active"]:
+            lines.insert(0, f"Learning from {s['decisions']} of your swipes: it is already shaping new picks.")
+        elif s["decisions"]:
+            lines.insert(0, f"Learning: {s['need']} more swipes and it starts shaping picks.")
+    except Exception:
+        pass
     return lines or ["Review a few clips and the engine will start learning your taste."]
 
 

@@ -164,3 +164,120 @@ def test_friendly_errors_and_crash_log(tmp_path, monkeypatch):
     assert "ZeroDivisionError" in (tmp_path / "logs" / "errors.log").read_text(encoding="utf-8")
     e = ValueError("same problem")
     assert errors.should_notify(e) and not errors.should_notify(e)         # no dialog spam for a repeating error
+
+
+def test_guidance_keywords_boost_and_penalise():
+    from engine.intelligence import moments
+    g = "Pick the funniest reactions and big crashes. Skip long setups, no clips about chat"
+    assert moments.guidance_bias(g, "haha that was hilarious") > 0
+    assert moments.guidance_bias(g, "the car crashed into the wall") > 0
+    assert moments.guidance_bias(g, "reading chat for a while about chat") < 0
+    assert moments.guidance_bias(g, "walking down the street") == 0
+    assert moments.guidance_bias("", "anything") == 0
+
+
+def test_ai_suggestions_fall_back_to_presets():
+    from engine.ai.suggest import PRESETS, ideas
+
+    class Bad:
+        def complete_json(self, s, p):
+            raise RuntimeError("no network")
+
+    class Good:
+        def complete_json(self, s, p):
+            return {"ideas": ["Find rage-quit moments", "Prefer clean setups", "x"]}
+    assert ideas(None)[:2] == PRESETS[:2] and ideas(Bad())[:2] == PRESETS[:2]
+    assert ideas(Good()) == ["Find rage-quit moments", "Prefer clean setups"]       # too-short junk is dropped
+
+
+def test_user_minimum_length_beats_video_type_default():
+    from engine import profiles
+    s = Settings()
+    s.clips.min_length = 40
+    eff = profiles.effective_settings(s, profiles.get("stream"))
+    assert eff.clips.min_duration >= 40 and eff.clips.target_max >= 50
+
+
+def test_cam_zoom_is_capped_and_tiny_cams_detected():
+    from engine.config import VideoSettings
+    from engine.video.compose import cam_window, cam_zoom_needed
+    v = VideoSettings()
+    tiny = {"layout": "split", "cam_box": [139, 280, 119, 216], "face_box": [164, 377, 43, 56]}
+    assert cam_zoom_needed(tiny, v, 1920, 1080) > 3.0
+    assert cam_window(tiny, 1080, 410, 1920, 1080, v.max_cam_zoom)[4] <= v.max_cam_zoom + 0.01
+
+
+def _seed_learning_db(tmp_path):
+    """20 moments: the ones with a strong hook + payoff get kept/posted, weak ones rejected."""
+    import json as _j
+    d = Database(tmp_path / "learn.db")
+    d.execute("INSERT INTO streams(id,platform,source_url,title,created_at,updated_at) VALUES (1,'file','x','S',0,0)")
+    for i in range(20):
+        good = i % 2 == 0
+        sub = {"hook_strength": 85 if good else 25, "payoff": 80 if good else 30, "entertainment": 70 if good else 40,
+               "emotional_intensity": 50, "unexpectedness": 50, "contextual_clarity": 60, "shareability": 50,
+               "audio_excitement": 60, "chat_activity": None}
+        d.execute("INSERT INTO candidates(id,stream_id,start,end,category,scores_json,created_at) VALUES (?,?,?,?,?,?,0)",
+                  (i + 1, 1, 0, 30, "funny" if good else "fail", _j.dumps(sub)))
+        d.execute("INSERT INTO clips(id,stream_id,candidate_id,start,end,score,status,video_path,created_at,updated_at) "
+                  "VALUES (?,?,?,?,?,?,?,?,0,0)", (i + 1, 1, i + 1, 0, 30, 70, "rendered", "v.mp4"))
+    return d, sub
+
+
+def test_swipes_teach_the_algorithm(tmp_path):
+    from engine import learn
+    d, _ = _seed_learning_db(tmp_path)
+    for i in range(1, 9):                                   # 8 swipes: not enough yet
+        review.decide(d, i, "keep" if i % 2 == 1 else "reject", None if i % 2 == 1 else "No payoff")
+    assert learn.model(d) is None and learn.status(d)["need"] == 4
+    for i in range(9, 21):
+        review.decide(d, i, "post" if i % 2 == 1 else "reject", None if i % 2 == 1 else "Weak start / boring")
+    m = learn.model(d)
+    assert m and m["n"] == 20
+    strong = {"hook_strength": 90, "payoff": 85, "entertainment": 75, "contextual_clarity": 60}
+    weak = {"hook_strength": 20, "payoff": 25, "entertainment": 35, "contextual_clarity": 60}
+    assert learn.adjust(d, strong, "funny", 30) > 3 and learn.adjust(d, weak, "fail", 30) < -3
+    assert learn.adjust(d, strong, "funny", 30, strength=0) == 0                # switch off = no effect
+    st = learn.status(d)
+    assert any("hook" in x or "payoff" in x for x in st["likes"]) and st["active"]
+    learn.forget(d)
+    assert learn.model(d) is None and learn.adjust(d, strong, "funny", 30) == 0
+    review.undo(d, 1)                                                           # undo keeps the learner consistent
+    assert learn.model(d) is None                                               # forgotten decisions stay forgotten
+
+
+def test_auto_rejects_do_not_teach(tmp_path):
+    from engine import learn
+    d, _ = _seed_learning_db(tmp_path)
+    for i in range(1, 21):
+        review.decide(d, i, "reject", "Auto: score under 99", auto=True)
+    assert learn.status(d)["decisions"] == 0 and learn.model(d) is None
+
+
+def test_videos_with_no_talking_are_treated_as_gameplay():
+    from engine import profiles
+    kw = ["gta 6"]
+    assert profiles.detect("The FINAL Best GTA 5 Moments Of All Time", 0.1, kw, words_per_min=1)[0] == "gameplay"
+    assert profiles.detect("Some video", 0.1, kw, words_per_min=120)[0] == "stream"        # a talker stays a streamer video
+    assert profiles.detect("Some video", 0.1, kw, words_per_min=None)[0] == "stream"       # unknown: old behaviour
+
+
+def test_all_rejected_for_no_speech_retries_as_gameplay_only_when_type_was_guessed(tmp_path):
+    from engine.config import Settings
+    from engine.pipeline import Engine
+    d = Database(tmp_path / "t.db")
+    s = Settings()
+    s.storage_dir = str(tmp_path / "storage")
+    eng = Engine(s, log=lambda m: None)
+    eng.db = d
+    for md, expect in (({"content_type": "stream", "content_type_reason": "guess"}, True),
+                       ({"content_type": "stream"}, False)):                               # the user chose it: respect that
+        d.execute("DELETE FROM streams")
+        d.execute("DELETE FROM candidates")
+        d.execute("INSERT INTO streams(id,platform,source_url,title,metadata_json,created_at,updated_at) VALUES (1,'youtube','x','t',?,0,0)",
+                  (json.dumps(md),))
+        for i in range(4):
+            d.execute("INSERT INTO candidates(stream_id,start,end,status,reject_reason,created_at) VALUES (1,0,9,'rejected',?,0)",
+                      ("AI rejected: No speech detected in the candidate window",))
+        assert eng._retry_as_gameplay(1) is expect
+    assert "Gameplay footage" in eng._no_clips_note(1) and "rejected" in eng._no_clips_note(1)

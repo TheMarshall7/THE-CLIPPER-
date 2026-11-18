@@ -179,6 +179,16 @@ def detect_layout(path: Path, start: float, end: float) -> Layout:
     return Layout("split", cam, face, round(conf * support, 2), [W, H], "yunet+static_border")
 
 
+def too_blurry_cam(found: dict, cfg, sw: int, sh: int) -> Optional[float]:
+    """The zoom the camera panel would need, if that is past the sharpness limit; otherwise None."""
+    from engine.video.compose import cam_zoom_needed
+
+    if found.get("layout") != "split" or not found.get("cam_box"):
+        return None
+    z = cam_zoom_needed(found, cfg, sw, sh)
+    return z if z > cfg.max_cam_zoom * 1.4 else None
+
+
 def force_layout(path: Path, start: float, end: float, style: str, found: dict) -> dict:
     """Apply the user's layout choice on top of what was auto-detected.
 

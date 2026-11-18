@@ -299,7 +299,7 @@ class App(ctk.CTk):
         c = card(p)
         c.grid(row=1, column=0, sticky="nsew")
         c.grid_columnconfigure(0, weight=1)
-        c.grid_rowconfigure(3, weight=1)
+        c.grid_rowconfigure(4, weight=1)
         head = self._card_title(c, "Video links", "YouTube · Twitch · Kick · or video files — one per line")
         button(head, "＋  Video files", self._add_video_files, width=140, height=36).pack(side="right")
         self.links = ctk.CTkTextbox(c, fg_color=CARD2, border_width=1, border_color=LINE, corner_radius=14,
@@ -319,13 +319,67 @@ class App(ctk.CTk):
         self.max_clips.pack(side="left")
         button(opts, "🎨  Style", self._open_style, width=110).pack(side="left", padx=12)
         button(opts, "＋  Add to queue", self._add_to_queue, primary=True, width=160).pack(side="right", padx=(24, 0))
+        # ---- AI suggestions: tell the AI brain how to choose and cut (applies to links you add next)
+        gbox = ctk.CTkFrame(c, fg_color=CARD2, corner_radius=14)
+        gbox.grid(row=3, column=0, sticky="ew", padx=28, pady=(0, 12))
+        gbox.grid_columnconfigure(0, weight=1)
+        gh = ctk.CTkFrame(gbox, fg_color="transparent")
+        gh.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
+        gh.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(gh, text="✦  AI suggestions: how should it choose and cut?", font=font(13, "bold"), text_color=PINK,
+                     anchor="w").grid(row=0, column=0, sticky="w")
+        button(gh, "💡 Suggest ideas", self._suggest_ideas, width=140, height=30, fg_color=CARD).grid(row=0, column=1, padx=(6, 0))
+        button(gh, "Clear", lambda: self.guidance.delete("1.0", "end"), width=64, height=30, fg_color=CARD).grid(row=0, column=2, padx=(6, 0))
+        self.guidance = ctk.CTkTextbox(gbox, fg_color=CARD, border_width=1, border_color=LINE, corner_radius=10, font=font(13),
+                                       text_color=TEXT, height=58, wrap="word")
+        self.guidance.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(gbox, text="Optional. Plain words, e.g. “pick the funniest reactions, skip long setups, no clips about chat”. "
+                     "It guides the AI (or, with no AI key, a keyword boost). Click an idea to add it.", font=font(11), text_color=MUTED,
+                     anchor="w", justify="left", wraplength=760).grid(row=2, column=0, sticky="w", padx=16)
+        self.idea_row = ctk.CTkFrame(gbox, fg_color="transparent")
+        self.idea_row.grid(row=3, column=0, sticky="ew", padx=12, pady=(4, 10))
+        self._show_ideas()
         self.queue_list = ctk.CTkScrollableFrame(c, fg_color=CARD2, corner_radius=14)
-        self.queue_list.grid(row=3, column=0, sticky="nsew", padx=28, pady=(0, 14))
+        self.queue_list.grid(row=4, column=0, sticky="nsew", padx=28, pady=(0, 14))
         self.go = button(c, "▶   Analyze & make clips", self._start, primary=True, height=56, corner_radius=28)
         self.go.configure(font=font(16, "bold"))
-        self.go.grid(row=4, column=0, sticky="ew", padx=28, pady=(0, 28))
+        self.go.grid(row=5, column=0, sticky="ew", padx=28, pady=(0, 28))
         self.queue: list[dict] = []
         self._render_queue()
+
+    def _show_ideas(self, ideas: list[str] | None = None) -> None:
+        from engine.ai.suggest import PRESETS
+
+        for w in self.idea_row.winfo_children():
+            w.destroy()
+        for k, text in enumerate((ideas or PRESETS)[:8]):
+            b = button(self.idea_row, text, lambda t=text: self._add_idea(t), height=28, fg_color=CARD, hover_color=LINE,
+                       font=font(12), text_color=TEXT)
+            b.grid(row=k // 4, column=k % 4, padx=3, pady=3, sticky="w")
+
+    def _add_idea(self, text: str) -> None:
+        cur = self.guidance.get("1.0", "end").strip()
+        if text.lower() in cur.lower():
+            return
+        self.guidance.insert("end", ("" if not cur else (" " if cur.endswith((".", ";")) else ". ")) + text + ".")
+        self.guidance.see("end")
+
+    def _suggest_ideas(self) -> None:
+        """Ask the AI for fresh instructions (needs an API key); otherwise show the built-in ideas."""
+        from engine.ai.llm import get_provider
+        from engine.ai.suggest import ideas
+        from engine.config import load_settings
+
+        label = self.type_var.get()
+        have = self.guidance.get("1.0", "end").strip()
+        prov, msg = get_provider(load_settings().ai)
+        self._show_ideas(["Thinking…"])
+
+        def work() -> None:
+            out = ideas(prov, label if label != "Auto-detect" else "streamer video", have)
+            self.after(0, lambda: (self._show_ideas(out), self._log("AI ideas ready." if prov else
+                                                                  "Showing built-in ideas. Add an API key in Settings for AI-written ones.")))
+        threading.Thread(target=work, daemon=True).start()
 
     def _add_to_queue(self) -> None:
         text = self.links.get("1.0", "end").strip()
@@ -334,7 +388,8 @@ class App(ctk.CTk):
             messagebox.showinfo("Nothing to add", "Paste a link (or add a video file) first.")
             return
         for ln in lines:
-            self.queue.append({"link": ln, "song": self.song_choice[0], "label": self.song_choice[1]})
+            self.queue.append({"link": ln, "song": self.song_choice[0], "label": self.song_choice[1],
+                               "focus": self.guidance.get("1.0", "end").strip() or None})
         self.links.delete("1.0", "end")
         self._render_queue()
 
@@ -352,7 +407,7 @@ class App(ctk.CTk):
             lab = ctk.CTkLabel(r, text=it["link"], font=f, text_color=TEXT, anchor="w", width=10)
             lab.grid(row=0, column=0, sticky="ew", padx=(20, 10), pady=16)
             fit_text(self, r, lab, it["link"], f, 20 + 10 + 190 + 16 + 56 + 16)
-            pill(r, "♪ " + it["label"][:22], VIOLET if it["song"] and it["song"] != "__none__" else CARD2).grid(row=0, column=1, padx=8)
+            pill(r, "♪ " + it["label"][:16] + ("  ·  ✦ guided" if it.get("focus") else ""), VIOLET if it["song"] and it["song"] != "__none__" else CARD2).grid(row=0, column=1, padx=8)
             if not (it["song"] and it["song"] != "__none__"):
                 r.winfo_children()[-1].configure(text_color=MUTED)
             button(r, "✕", lambda k=i: self._remove_queued(k), width=40, height=36, corner_radius=18, fg_color=LINE,
@@ -468,6 +523,9 @@ class App(ctk.CTk):
         add(f, "Let the AI judge where the song lands", "ai_placement", "switch", ms.ai_placement)
         add(f, "Show song name tag", "sound_tag", "switch", ms.sound_tag)
         add(f, "Song card at the end", "end_card", "switch", ms.end_card)
+        f = section("CLIP LENGTH")
+        add(f, "Minimum clip length (seconds)", "min_length", "entry", int(load_settings().clips.min_length))
+        add(f, "Longest clip (seconds)", "max_duration", "entry", int(load_settings().clips.max_duration))
         f = section("VIDEO")
         layouts = {"auto": "Auto-detect", "double": "Double camera (cam on top, scene below)", "single": "Single (one full view)"}
         add(f, "Layout", "layout_style", "menu", layouts[vs.layout_style], list(layouts.values()))
@@ -475,6 +533,11 @@ class App(ctk.CTk):
         add(f, "Punch-in zoom on the payoff", "punch_in", "switch", vs.punch_in)
         add(f, "Divider line between cam and game", "divider", "switch", vs.divider)
         add(f, "Divider colour", "divider_color", "menu", cname(vs.divider_color), list(colors))
+        qual = {"standard": "Standard", "high": "High (sharper, larger files)", "max": "Maximum (sharpest, largest files)"}
+        cur_q = "max" if vs.crf <= 16 else "high" if vs.crf <= 18 else "standard"
+        add(f, "Video quality", "quality", "menu", qual[cur_q], list(qual.values()))
+        fvm = {"blur": "Whole picture over a blurred backdrop", "fill": "Zoom to fill the screen (sharp, crops the sides)"}
+        add(f, "Clips with no face cam", "full_view_mode", "menu", fvm[vs.full_view_mode], list(fvm.values()))
         add(f, "Face tracking (camera panel follows his face)", "face_tracking", "switch", vs.face_tracking)
         add(f, "Lead with the best part first", "lead_with_best", "switch", vs.lead_with_best)
         add(f, "Best-part length (seconds)", "lead_seconds", "entry", vs.lead_seconds)
@@ -500,7 +563,12 @@ class App(ctk.CTk):
             secs = num("hook_seconds", 0.5, 10, "Title seconds")
             cam = num("cam_ratio", 15, 60, "Face cam share")
             lead = num("lead_seconds", 1, 4, "Best-part length")
-            if size is None or secs is None or cam is None or lead is None:
+            lo = num("min_length", 5, 120, "Minimum clip length")
+            hi = num("max_duration", 15, 180, "Longest clip")
+            if size is None or secs is None or cam is None or lead is None or lo is None or hi is None:
+                return
+            if lo >= hi:
+                msg.set("The minimum clip length must be shorter than the longest clip.")
                 return
             cfg = load_settings()
             c = cfg.captions
@@ -516,10 +584,13 @@ class App(ctk.CTk):
             c.show_hook, c.hook_seconds = bool(vars_["show_hook"].get()), float(secs)
             c.title_style = next((k for k, t in tstyles.items() if t == vars_["title_style"].get()), "box")
             cfg.music.style = next((k for k, v in styles.items() if v == vars_["music_style"].get()), "auto")
+            cfg.clips.min_length, cfg.clips.max_duration = float(lo), float(hi)
             cfg.music.ai_placement = bool(vars_["ai_placement"].get())
             cfg.music.sound_tag, cfg.music.end_card = bool(vars_["sound_tag"].get()), bool(vars_["end_card"].get())
             v = cfg.video
             v.cam_ratio = float(cam) / 100
+            v.crf = {"Standard": 20, "High (sharper, larger files)": 18, "Maximum (sharpest, largest files)": 16}.get(vars_["quality"].get(), 18)
+            v.full_view_mode = "fill" if vars_["full_view_mode"].get().startswith("Zoom") else "blur"
             v.layout_style = next((k for k, t in layouts.items() if t == vars_["layout_style"].get()), "auto")
             v.punch_in, v.divider = bool(vars_["punch_in"].get()), bool(vars_["divider"].get())
             v.divider_color = colors[vars_["divider_color"].get()]
@@ -1042,7 +1113,7 @@ class App(ctk.CTk):
             ok, errs = 0, []
             for it in items:
                 try:
-                    self.server._queue_source(it["link"], None, None, None, max_clips, ctype, it["song"])
+                    self.server._queue_source(it["link"], None, None, it.get("focus"), max_clips, ctype, it["song"])
                     ok += 1
                 except Exception as e:
                     errs.append(f"{it['link']}: {e}")

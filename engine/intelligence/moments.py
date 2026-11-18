@@ -301,7 +301,8 @@ def _num(v, lo, hi, default):
 def evaluate(cands: list[dict], units: list[dict], ctx: dict, settings: Settings, provider,
              log: Callable[[str], None] = print) -> list[dict]:
     cfg = settings.clips
-    focus = f"User focus: only keep moments matching '{ctx['focus']}'." if ctx.get("focus") else ""
+    focus = (f"The user's own instructions for choosing and cutting clips (follow them when judging, scoring and picking the setup "
+             f"and payoff points; they outrank your defaults): \"{ctx['focus']}\"") if ctx.get("focus") else ""
     prof = ctx.get("profile") or profiles.get("stream")
     system = SYSTEM.format(vertical=settings.vertical, label=prof.label, guidance=prof.guidance)
     evidence_note = ("" if prof.evidence == "speech" else
@@ -363,7 +364,59 @@ them against each other (hook, payoff, surprise, standalone clarity, shareabilit
 Return JSON: {{"order": [ids best first], "notes": {{"<id>": "one short reason"}}}}"""
 
 
-def rank(cands: list[dict], provider, settings: Settings, log: Callable[[str], None] = print, profile=None) -> None:
+_NEG = ("skip", "avoid", "no ", "without", "ignore", "not ", "don't", "dont", "less ", "never", "exclude")
+_STOP = {"clips", "clip", "moments", "moment", "that", "this", "with", "from", "have", "make", "only", "more", "very", "when",
+         "where", "what", "show", "want", "like", "just", "than", "them", "they", "their", "into", "about", "mostly", "fast",
+         "short", "long", "keep", "get", "the", "and", "for", "are", "who", "all", "any", "big", "end", "point",
+         "skip", "avoid", "ignore", "without", "never", "exclude", "pick", "find", "choose", "also", "some", "less", "setups", "setup"}
+_SYN = {
+    "funny": {"funny", "laugh", "laughing", "lol", "haha", "hilarious", "joke", "dying"},
+    "laughs": {"laugh", "laughing", "lol", "haha", "hilarious"},
+    "action": {"shoot", "shooting", "chase", "explosion", "crash", "fight", "gun", "police", "cops", "wanted"},
+    "crashes": {"crash", "crashed", "wreck", "flip", "flipped", "collision"},
+    "explosions": {"explosion", "explode", "exploded", "boom", "blow"},
+    "yelling": {"yell", "yelling", "scream", "screaming", "shout", "ahh", "aah", "no way"},
+    "raging": {"rage", "raging", "mad", "angry", "furious"},
+    "rage": {"rage", "raging", "mad", "angry", "furious"},
+    "reveals": {"reveal", "twist", "secret", "wait", "what", "plot"},
+    "fails": {"fail", "failed", "oops", "dead", "died", "bug", "glitch"},
+    "scary": {"scary", "scared", "jumpscare", "horror"},
+}
+
+
+def guidance_terms(text: str) -> tuple[set[str], set[str]]:
+    """(wanted words, unwanted words) from the user's free-text instructions. Simple on purpose: it is only the fallback
+    for when no AI is available to read the instructions properly."""
+    import re
+
+    pos: set[str] = set()
+    neg: set[str] = set()
+    for clause in re.split(r"[.;\n]+", (text or "").lower()):
+        c = clause.strip()
+        if not c:
+            continue
+        bad = any(c.startswith(n.strip()) or f" {n}" in f" {c}" for n in _NEG)
+        for w in re.findall(r"[a-z']{4,}", c):
+            if w in _STOP:
+                continue
+            extra: set[str] = set()
+            for key, syns in _SYN.items():            # "funniest" / "funny" / "funnier" all mean the "funny" family
+                if w.startswith(key[:4]) or key.startswith(w[:4]):
+                    extra |= syns
+            (neg if bad else pos).update({w} | extra | _SYN.get(w, set()))
+    return pos, neg
+
+
+def guidance_bias(text: str, haystack: str) -> float:
+    """Score change (about -24..+18) for a candidate whose transcript/summary is `haystack`."""
+    pos, neg = guidance_terms(text)
+    h = (haystack or "").lower()
+    hits_p = sum(1 for w in pos if w in h)
+    hits_n = sum(1 for w in neg if w in h)
+    return min(18.0, 6.0 * hits_p) - min(24.0, 12.0 * hits_n)
+
+
+def rank(cands: list[dict], provider, settings: Settings, log: Callable[[str], None] = print, profile=None, focus: str = "") -> None:
     """Blend a comparative ranking into each candidate's total (in place). Model-only."""
     if provider is None or len(cands) < 2 or not settings.clips.final_ranking:
         return
@@ -372,7 +425,8 @@ def rank(cands: list[dict], provider, settings: Settings, log: Callable[[str], N
     try:
         prof = profile or profiles.get("stream")
         res = provider.complete_json(SYSTEM.format(vertical=settings.vertical, label=prof.label, guidance=prof.guidance),
-                                     RANK_PROMPT.format(vertical=settings.vertical, label=prof.label, items=items))
+                                     RANK_PROMPT.format(vertical=settings.vertical, label=prof.label, items=items)
+                                     + (f"\nThe user's own instructions (they outrank your defaults): \"{focus}\"" if focus else ""))
         order = [int(x) for x in res.get("order", []) if str(x).lstrip("-").isdigit() and 0 <= int(x) < len(cands)]
     except Exception as e:
         log(f"final ranking skipped ({e})")

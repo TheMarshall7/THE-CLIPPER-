@@ -155,7 +155,7 @@ class ReviewPage:
         self.busy = False
         self._build()
         for key, fn in (("<Left>", lambda: self.reject()), ("<Right>", lambda: self.decide("keep")), ("<Up>", lambda: self.decide("post")),
-                        ("z", self.undo), ("<space>", self.replay)):
+                        ("z", self.undo), ("<BackSpace>", self.undo), ("<space>", self.replay)):
             app.bind(key, lambda e, f=fn: self._key(e, f))
         for n in range(1, len(review.REASONS) + 1):
             app.bind(str(n), lambda e, k=n: self._key(e, lambda: self.reject(review.REASONS[k - 1])))
@@ -180,6 +180,7 @@ class ReviewPage:
                                            unselected_color=G.CARD2, text_color=G.IVORY)
         self.tabs.set("Review")
         self.tabs.pack(side="left", padx=(0, 10))
+        G.button(bar, "🧠  Learning", self.learn_dialog, width=130, height=38).pack(side="left", padx=(0, 8))
         G.button(bar, "⚙  Auto-reject…", self.auto_dialog, width=150, height=38).pack(side="left")
 
         self.insight = ctk.CTkLabel(p, text="", font=G.font(12), text_color=G.MUTED, anchor="w", justify="left")
@@ -202,9 +203,17 @@ class ReviewPage:
         G.button(row, "✕  Reject  ←", lambda: self.reject(), height=50, fg_color="#3A1618", hover_color=G.RED).grid(row=0, column=0, sticky="ew", padx=3)
         G.button(row, "✓  Keep  →", lambda: self.decide("keep"), height=50, fg_color="#1D3A22", hover_color="#2E7D45").grid(row=0, column=1, sticky="ew", padx=3)
         G.button(row, "★  Post  ↑", lambda: self.decide("post"), primary=True, height=50).grid(row=0, column=2, sticky="ew", padx=3)
-        row2 = ctk.CTkFrame(left, fg_color="transparent")
+        # after every decision a big UNDO bar appears for a few seconds, so a slip of the arrow key is one click to fix
+        self.toast_box = ctk.CTkFrame(left, fg_color="#2A1E0E", corner_radius=14, border_width=1, border_color=G.AMBER)
+        self.toast_box.grid_columnconfigure(0, weight=1)
+        self.toast_text = ctk.CTkLabel(self.toast_box, text="", font=G.font(13, "bold"), text_color=G.IVORY, anchor="w")
+        self.toast_text.grid(row=0, column=0, sticky="ew", padx=(14, 6), pady=10)
+        G.button(self.toast_box, "↶  UNDO", self.undo, width=110, height=36, fg_color=G.AMBER, hover_color="#FFD36B",
+                 text_color="#1A1205").grid(row=0, column=1, padx=(0, 10), pady=8)
+        self.toast_job = None
+        row2 = self.row2 = ctk.CTkFrame(left, fg_color="transparent")
         row2.pack(fill="x")
-        G.button(row2, "↶ Undo (Z)", self.undo, width=110, height=34, fg_color=G.CARD2).pack(side="left")
+        G.button(row2, "↶ Undo last  (Z)", self.undo, width=150, height=34, fg_color=G.CARD2, text_color=G.AMBER).pack(side="left")
         G.button(row2, "⟲ Replay", self.replay, width=100, height=34, fg_color=G.CARD2).pack(side="left", padx=6)
         G.button(row2, "Open with sound", self.open_external, width=140, height=34, fg_color=G.CARD2).pack(side="right")
 
@@ -378,17 +387,41 @@ class ReviewPage:
 
     def _advance(self, c: dict) -> None:
         self.history.append(c["id"])
+        rv = self.db.one("SELECT decision, reason FROM clip_review WHERE clip_id=?", (c["id"],))
+        what = {"reject": "✕ Rejected" + (f" · {rv['reason']}" if rv and rv["reason"] else ""), "keep": "✓ Kept",
+                "post": "★ Marked to post"}.get(rv["decision"] if rv else "", "Done")
         self.i += 1
         self.show_current()
+        self._toast(what)
+
+    def _toast(self, text: str) -> None:
+        """Show the UNDO bar for 8 seconds."""
+        self.toast_text.configure(text=text)
+        self.toast_box.pack(fill="x", pady=(0, 10), before=self.row2)
+        if self.toast_job is not None:
+            try:
+                self.app.after_cancel(self.toast_job)
+            except Exception:
+                pass
+        self.toast_job = self.app.after(8000, self._hide_toast)
+
+    def _hide_toast(self) -> None:
+        self.toast_job = None
+        self.toast_box.pack_forget()
 
     def undo(self) -> None:
-        if self.view != "Review" or not self.history:
+        """Take back the last decision (reject / keep / post). Works even after you left the tab or restarted the app."""
+        if self.view != "Review" or self.busy:
             return
-        cid = self.history.pop()
+        cid = self.history.pop() if self.history else review.last_manual(self.db)
+        if cid is None:
+            self.app._log("Nothing to undo.")
+            return
         review.undo(self.db, cid)
         self.queue = review.to_review(self.db)
         self.i = next((n for n, c in enumerate(self.queue) if c["id"] == cid), 0)
         self.show_current()
+        self._toast("↶ Undone — back on this clip")
 
     def replay(self) -> None:
         c = self._current()
@@ -430,6 +463,76 @@ class ReviewPage:
     def restore(self, cid: int) -> None:
         review.undo(self.db, cid)
         self.render_list()
+
+    # ------------------------------------------------------------------ what the engine has learned from your swipes
+    def learn_dialog(self) -> None:
+        from engine import learn
+        from engine.config import load_settings, save_settings
+
+        G = self.G
+        st = learn.status(self.db)
+        cfg = load_settings()
+        win = ctk.CTkToplevel(self.app, fg_color=G.BG)
+        win.title("Learning")
+        win.geometry("560x560")
+        win.minsize(500, 420)
+        win.transient(self.app)
+        win.after(150, lambda: (self.app._dark_caption(win), win.grab_set(), win.focus_force()))
+        win.grid_columnconfigure(0, weight=1)
+        win.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(win, text="What the engine learned from you", font=G.font(22, "bold"), text_color=G.TEXT).grid(
+            row=0, column=0, sticky="w", padx=28, pady=(26, 6))
+        body = G.card(win)
+        body.grid(row=1, column=0, sticky="nsew", padx=24, pady=8)
+        body.grid_columnconfigure(0, weight=1)
+        led = G.GREEN if st["active"] else G.AMBER
+        head = (f"●  Learning is ON and shaping new picks" if st["active"] else
+                f"●  Not enough yet: {st['need']} more swipe(s) to start (needs a few keeps and a few rejects)")
+        ctk.CTkLabel(body, text=head, font=G.font(14, "bold"), text_color=led, anchor="w", wraplength=480, justify="left").grid(
+            row=0, column=0, sticky="w", padx=22, pady=(20, 6))
+        lines = [f"{st['decisions']} decisions so far:  {st['keeps']} kept / posted,  {st['rejects']} rejected"]
+        if st["likes"]:
+            lines.append("You tend to keep clips with: " + ", ".join(st["likes"]))
+        if st["dislikes"]:
+            lines.append("You tend to reject clips with: " + ", ".join(st["dislikes"]))
+        lines += review.insights(self.db)
+        ctk.CTkLabel(body, text="\n".join(lines), font=G.font(13), text_color=G.TEXT, anchor="w", justify="left", wraplength=480).grid(
+            row=1, column=0, sticky="w", padx=22, pady=(0, 12))
+        ctk.CTkLabel(body, text="Every Keep / Post / Reject you do by hand teaches it. New moments that look like the ones you keep "
+                     "score higher, and ones like your rejects score lower, the next time you make clips. Auto-rejects never teach it.",
+                     font=G.font(12), text_color=G.MUTED, anchor="w", justify="left", wraplength=480).grid(row=2, column=0, sticky="w", padx=22)
+        use = ctk.BooleanVar(value=cfg.review.learn)
+        ctk.CTkSwitch(body, text="Use what it learned when choosing clips", variable=use, progress_color=G.VIOLET, font=G.font(13)).grid(
+            row=3, column=0, sticky="w", padx=22, pady=(14, 6))
+        strengths = {"Gentle": 0.5, "Normal": 1.0, "Strong": 1.5}
+        cur = next((k for k, v in strengths.items() if abs(v - cfg.review.learn_strength) < 0.01), "Normal")
+        sv = ctk.StringVar(value=cur)
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.grid(row=4, column=0, sticky="w", padx=22, pady=(0, 18))
+        ctk.CTkLabel(row, text="How strongly", font=G.font(13), text_color=G.TEXT).pack(side="left")
+        ctk.CTkOptionMenu(row, variable=sv, values=list(strengths), width=120, height=34, fg_color=G.CARD2, button_color=G.LINE,
+                          button_hover_color=G.VIOLET, dropdown_fg_color=G.CARD2).pack(side="left", padx=10)
+        msg = ctk.StringVar()
+        ctk.CTkLabel(win, textvariable=msg, font=G.font(13), text_color=G.AMBER, wraplength=500).grid(row=3, column=0, sticky="w", padx=28)
+
+        def save() -> None:
+            c2 = load_settings()
+            c2.review.learn = bool(use.get())
+            c2.review.learn_strength = strengths[sv.get()]
+            save_settings(c2)
+            self.app.settings = c2
+            win.destroy()
+
+        def forget() -> None:
+            self.app.confirm("Forget everything it learned?", "The engine will start learning from scratch. Your clips and "
+                             "decisions are not deleted; they just stop teaching it.", "Yes, forget it",
+                             lambda: (learn.forget(self.db), msg.set("Forgotten. It will learn again from your next swipes."),
+                                      self._counts_line()), danger=True)
+        bar = ctk.CTkFrame(win, fg_color="transparent")
+        bar.grid(row=2, column=0, sticky="ew", padx=28, pady=(8, 20))
+        G.button(bar, "Save", save, primary=True, width=100, height=42).pack(side="left")
+        G.button(bar, "Forget what it learned", forget, width=190, height=42, fg_color=G.CARD2, hover_color=G.RED).pack(side="left", padx=8)
+        G.button(bar, "Close", win.destroy, width=90, height=42, fg_color=G.CARD2).pack(side="right")
 
     # ------------------------------------------------------------------ auto-reject rules
     def auto_dialog(self) -> None:

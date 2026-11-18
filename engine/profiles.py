@@ -142,7 +142,8 @@ def effective_settings(settings: Settings, profile: Profile) -> Settings:
                                if k in ScoringWeights.model_fields}}
     s.weights = ScoringWeights(**w)
     c = s.clips
-    c.min_duration, c.target_max = profile.min_duration, profile.target_max
+    c.min_duration = max(profile.min_duration, settings.clips.min_length)       # the user's minimum always wins
+    c.target_max = max(profile.target_max, c.min_duration + 10.0)
     c.sweet_spot, c.max_setup_s = list(profile.sweet_spot), profile.max_setup_s
     s.video.jump_cuts = settings.video.jump_cuts and profile.jump_cuts
     if s.music.volume_preset is None:
@@ -159,7 +160,7 @@ _GAME = re.compile(r"\bgame\b|gaming|playstation|\bps[45]\b|xbox|nintendo|switch
 _GAMEPLAY = re.compile(r"gameplay|walkthrough|montage|no commentary|longplay", re.I)
 
 
-def detect(title: str, music_fraction: float, vertical_keywords: list[str]) -> tuple[str, str]:
+def detect(title: str, music_fraction: float, vertical_keywords: list[str], words_per_min: float | None = None) -> tuple[str, str]:
     """Best-guess profile key + the reason. A heuristic from the title and how much of the audio is music;
     the New job dropdown (or the Streams table) always overrides it."""
     t = (title or "").lower()
@@ -178,6 +179,9 @@ def detect(title: str, music_fraction: float, vertical_keywords: list[str]) -> t
         return "movie_trailer", "the title looks like a trailer (no game cue, so the broader movie/TV ranking is used)"
     if _GAMEPLAY.search(t):
         return "gameplay", "the title looks like gameplay footage"
+    if words_per_min is not None and words_per_min < 30:
+        # a "streamer video" needs a streamer talking. Hardly any speech = compilation / montage / raw gameplay
+        return "gameplay", f"very little talking ({words_per_min:.0f} words a minute), so it is treated as gameplay footage"
     if music_fraction >= 0.4:
         key = "game_trailer" if is_game else "movie_trailer"
         return key, f"music plays {music_fraction:.0%} of the time, so it is more likely a trailer than a streamer"

@@ -112,6 +112,11 @@ def best_matches(db: Database, clip_ctx: dict, settings, top: int = 3) -> tuple[
     ms = settings.music
     songs = db.query("SELECT * FROM songs")
     out, skipped = [], []
+    try:
+        from engine.review import taste_model
+        taste = taste_model(db)
+    except Exception:
+        taste = {}
     from engine.music.placement import talk_ratio
     modes = preferred_modes(clip_ctx["category"], clip_ctx["speech_rate"], clip_ctx["energy"],
                             talk_ratio(clip_ctx["speech"], clip_ctx["duration"]))
@@ -134,6 +139,10 @@ def best_matches(db: Database, clip_ctx: dict, settings, top: int = 3) -> tuple[
         recent = sum(1 for r in db.query("SELECT song_id FROM song_usage ORDER BY id DESC LIMIT ?", (ms.rotation_window,))
                      if r["song_id"] == s["id"])
         score, parts, note = fit_score(a, artist, p, clip_ctx["category"], clip_ctx["energy"], s["campaign_priority"], None, recent)
+        if getattr(settings, "review", None) is not None and settings.review.learn:     # songs you keep get a bonus, rejected ones a penalty
+            rate = taste.get(("song", s["slug"]))
+            if rate is not None:
+                score = min(100.0, max(0.0, score + (rate - 0.5) * 24 * settings.review.learn_strength))
         if ms.campaign_song == s["slug"]:
             score = min(100.0, score + 25)
         out.append({"song_id": s["id"], "slug": s["slug"], "title": s["title"], "artist": artist["name"] if artist else "",

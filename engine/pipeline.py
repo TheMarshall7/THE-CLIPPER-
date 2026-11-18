@@ -42,7 +42,7 @@ from engine.video.compose import mux_audio
 from engine.scoring.score import dedupe, penalties, rejection_reason, total_score
 from engine.transcription.whisper import transcribe_wav
 from engine.video.compose import RenderSpec, render
-from engine.video.webcam import detect_layout, force_layout, track_face
+from engine.video.webcam import detect_layout, force_layout, too_blurry_cam, track_face
 
 STEPS = ("audio", "features", "transcribe", "music_scan", "chat", "moments", "clips")
 
@@ -228,7 +228,10 @@ class Engine:
         chat_out = self._step(stream_id, "chat", step_chat, "chat" in forced)
 
         def step_moments():
-            return {"selected": self.find_moments(stream_id, focus, chat_out)}
+            sel0 = self.find_moments(stream_id, focus, chat_out)
+            if not sel0 and self._retry_as_gameplay(stream_id):
+                sel0 = self.find_moments(stream_id, focus, chat_out)
+            return {"selected": sel0}
 
         sel = self._step(stream_id, "moments", step_moments, bool(forced & {"moments"}) or focus is not None)
 
@@ -237,7 +240,11 @@ class Engine:
             return {"clips": ids}
 
         out = self._step(stream_id, "clips", step_clips, bool(forced & {"clips", "moments"}) or focus is not None)
-        self.db.update("streams", stream_id, {"status": "processed", "error": None, "updated_at": time.time()})
+        note = None
+        if not out["clips"]:
+            note = self._no_clips_note(stream_id)
+            self.log(note, stream_id, "warning")
+        self.db.update("streams", stream_id, {"status": "processed", "error": note, "updated_at": time.time()})
         if self.s.cleanup_temp:
             shutil.rmtree(self.s.temp, ignore_errors=True)
         if self._provider is not None and getattr(self._provider, "calls", 0):
@@ -262,11 +269,54 @@ class Engine:
             return ct
         step = self.db.one("SELECT output_json FROM stream_steps WHERE stream_id=? AND step='music_scan'", (stream_id,))
         frac = float((loads(step["output_json"], {}) or {}).get("music_fraction", 0.0)) if step else 0.0
-        ct, why = profiles.detect(row["title"] or "", frac, self.s.vertical_keywords)
+        wpm = self._words_per_min(stream_id)
+        ct, why = profiles.detect(row["title"] or "", frac, self.s.vertical_keywords, wpm)
         md["content_type"], md["content_type_reason"] = ct, why
         self.db.update("streams", stream_id, {"metadata_json": md})
         self.log(f"video type: {profiles.get(ct).label} ({why})", stream_id)
         return ct
+
+    def _words_per_min(self, stream_id: int) -> Optional[float]:
+        """How much anyone talks in this video (None until it has been transcribed)."""
+        row = self._stream(stream_id)
+        tstep = self.db.one("SELECT output_json FROM stream_steps WHERE stream_id=? AND step='transcribe'", (stream_id,))
+        if not tstep:
+            return None
+        t = loads(tstep["output_json"], {}) or {}
+        mins = float(t.get("audio_seconds") or row["duration"] or 0) / 60.0
+        return float(t["words"]) / mins if mins > 0.5 and t.get("words") is not None else None
+
+    def _no_clips_note(self, stream_id: int) -> str:
+        """Plain-language reason a video produced nothing, with what to try."""
+        rows = self.db.query("SELECT reject_reason, COUNT(*) n FROM candidates WHERE stream_id=? AND status='rejected' "
+                             "GROUP BY reject_reason ORDER BY n DESC LIMIT 3", (stream_id,))
+        total = self.db.one("SELECT COUNT(*) FROM candidates WHERE stream_id=?", (stream_id,))[0]
+        if not total:
+            return ("No clips: no standout moments were found. The video may be too quiet or too short; try a lower 'sensitivity' "
+                    "or pick the right Video type on New job.")
+        top = (rows[0]["reject_reason"] or "").replace("AI rejected: ", "")[:110] if rows else ""
+        return (f"No clips: all {total} candidate moments were rejected (most common: {top}). If this video has little talking, "
+                "set Video type to 'Gameplay footage' on New job, or add guidance in AI suggestions.")
+
+    def _retry_as_gameplay(self, stream_id: int) -> bool:
+        """Every moment was rejected and most rejections are about missing speech, on a video whose type we guessed: it was
+        probably misread as a talking video. Switch it to gameplay footage (no speech needed) and let the caller try again."""
+        row = self._stream(stream_id)
+        md = loads(row["metadata_json"], {}) or {}
+        if "content_type_reason" not in md or md.get("content_type") not in ("stream", "podcast"):
+            return False                                   # the user chose the type themselves: respect it
+        rej = [r["reject_reason"] or "" for r in self.db.query(
+            "SELECT reject_reason FROM candidates WHERE stream_id=? AND status='rejected'", (stream_id,))]
+        sparse = sum(1 for r in rej if any(w in r.lower() for w in ("speech", "transcript", "silence", "dead air", "words")))
+        wpm = self._words_per_min(stream_id)
+        hardly_talking = wpm is not None and wpm < 60          # the real test: does anyone talk? (reasons differ with/without AI)
+        if not rej or not (hardly_talking or sparse >= max(1, len(rej) // 2)):
+            return False
+        md["content_type"] = "gameplay"
+        md["content_type_reason"] = "no moment had enough speech, so it is treated as gameplay footage"
+        self.db.update("streams", stream_id, {"metadata_json": md})
+        self.log("Nothing had enough speech to make a clip: trying again as gameplay footage (no talking needed).", stream_id)
+        return True
 
     def profile_for(self, stream_id: int) -> "profiles.Profile":
         return profiles.get(self.resolve_content_type(stream_id))
@@ -294,6 +344,8 @@ class Engine:
         S.clips.candidate_pool = max(S.clips.candidate_pool, int(round(duration / 3600 * S.clips.pool_per_hour)))
         cands = moments.propose(ex, chat, units, S, duration)
         self.log(f"{len(cands)} signal peaks proposed for evaluation ({prof.label})", stream_id)
+        if focus:
+            self.log(f"Using your instructions: \"{focus[:120]}\"" + ("" if self.provider else " (keyword mode: no AI key)"), stream_id)
         ctx = {"streamer": streamer["name"] if streamer else None, "title": row["title"], "focus": focus,
                "duration": duration, "profile": prof}
         moments.evaluate(cands, units, ctx, S, self.provider, log=lambda m: self.log(m, stream_id))
@@ -310,6 +362,18 @@ class Engine:
             c["penalties"] = penalties(c["end"] - c["start"], c["signals"]["peak_offset_s"],
                                        bool(c.get("starts_mid_sentence")), S.clips)
             c["total"] = total_score(c["sub"], S.weights, c["penalties"])
+            if focus and self.provider is None:        # no AI to read the instructions: nudge the score by their keywords
+                words = " ".join(w["word"] for w in words_in(self.load_segments(stream_id), c["start"], c["end"]))
+                bias = moments.guidance_bias(focus, f"{words} {c.get('summary') or ''} {c.get('category') or ''}")
+                if bias:
+                    c["total"] = round(max(0.0, min(100.0, c["total"] + bias)), 1)
+                    c["ai"]["guidance_bias"] = bias
+            if self.s.review.learn:                    # what you kept / rejected in Review teaches the picks
+                from engine import learn
+                adj = learn.adjust(self.db, c["sub"], c.get("category"), c["end"] - c["start"], self.s.review.learn_strength)
+                if adj:
+                    c["total"] = round(max(0.0, min(100.0, c["total"] + adj)), 1)
+                    c["ai"]["learned_adj"] = adj
             c["reject"] = rejection_reason(c, S.clips, prof.require_speech)
             c["ai"]["profile"] = prof.key
         survivors = dedupe([c for c in cands if not c["reject"]])
@@ -317,7 +381,7 @@ class Engine:
         for c in cands:
             if not c["reject"] and id(c) not in keep_ids:
                 c["reject"] = "duplicate of a stronger overlapping moment"
-        moments.rank(survivors, self.provider, S, log=lambda m: self.log(m, stream_id), profile=prof)
+        moments.rank(survivors, self.provider, S, log=lambda m: self.log(m, stream_id), profile=prof, focus=focus or "")
         for c in survivors:
             c["ai"]["rank_note"] = c.get("rank_note")
             c["sub"]["_penalties"] = c["penalties"]
@@ -488,6 +552,11 @@ class Engine:
         else:
             layout = detect_layout(src, src_start, src_start + dur).to_dict()
             layout = force_layout(src, src_start, src_start + dur, self.s.video.layout_style, layout)
+            z = too_blurry_cam(layout, self.s.video, pinfo.width, pinfo.height) if self.s.video.layout_style == "auto" else None
+            if z:      # the camera is so small it would have to be enlarged into a blur: show the whole picture instead
+                layout = {"layout": "gameplay_only", "cam_box": None, "face_box": layout.get("face_box"), "confidence": 1.0,
+                          "frame_size": layout.get("frame_size"), "method": f"cam too small to show sharply ({z:.1f}x zoom)",
+                          "manual": False}
         if info.platform != "file":
             layout["_segment"] = {"start": seg_start, "end": meta.get("end", end + 8.0)}
 
@@ -535,6 +604,17 @@ class Engine:
                 start = max(0.0, prv["start"] - 0.2)
             else:
                 break
+            words, keep_abs, out_dur = cut_plan(start, end, protect)
+        for _ in range(4):               # still short (no neighbouring sentences)? extend by plain time, tail first
+            need = S.clips.min_duration - out_dur
+            if need <= 0.05:
+                break
+            room_after = max(0.0, media_dur - end)
+            take_end = min(room_after, need * 1.15 if start <= 0.5 else need * 0.6)
+            end += take_end
+            start = max(0.0, start - (need * 1.15 - take_end))
+            if take_end < 0.05 and start <= 0.0:
+                break                    # the whole video is shorter than the minimum
             words, keep_abs, out_dur = cut_plan(start, end, protect)
         # (b) reaction-tail songs need room after the last word: let the reaction breathe (<= 6 s)
         if self.s.music.enabled and clip["score"] is not None and clip["score"] >= self.s.music.viral_gate \
@@ -1071,6 +1151,9 @@ class Engine:
                 blocks.append("true peak too high")
         else:
             blocks.append("no audio")
+        min_len = self.s.clips.min_length
+        if min_len and expected < min_len - 1.0:
+            blocks.append(f"shorter than your minimum clip length ({expected:.0f}s < {min_len:.0f}s)")
         checks["caption_words"] = len(words)
         sig = loads(cand["signals_json"], {}) if cand else {}
         checks["silence_ratio"] = sig.get("silence_ratio")
