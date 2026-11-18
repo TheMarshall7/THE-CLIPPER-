@@ -54,7 +54,7 @@ class MusicSettings(BaseModel):
     release_ms: int = 400
     volume_preset: Optional[Literal["subtle", "balanced", "featured", "trailer"]] = None   # None = the video type's default
     rotation_window: int = 10
-    rotation_max: int = 3
+    rotation_max: int = 0             # most times one song may appear in the last `rotation_window` clips (0 = no limit)
     campaign_song: Optional[str] = None
     intelligibility_max_drop: float = 0.10
     sound_tag: bool = True

@@ -298,3 +298,18 @@ def test_new_clips_come_first_in_review_and_can_be_filtered(tmp_path):
     assert [v["stream_id"] for v in review.waiting_by_video(d)] == [2, 1]
     review.decide(d, 4, "keep")
     assert review.waiting_count(d) == 3
+
+
+def test_one_song_can_be_used_for_100_clips(tmp_path):
+    from engine.music.match import song_ineligible
+    d = Database(tmp_path / "t.db")
+    d.execute("INSERT INTO artists(id,name,created_at) VALUES (1,'A',0)")
+    a = {"bars": [0, 2], "duration": 60, "hook": {"start": 5, "end": 15, "downbeat": 5}}
+    d.execute("INSERT INTO songs(id,slug,title,file_path,analysis_json,artist_id,created_at) VALUES (1,'s','S','x.wav',?,1,0)", (json.dumps(a),))
+    d.execute("INSERT INTO song_rights_confirmations(song_id,confirmed_by,statement,confirmed_at) VALUES (1,'me','mine',0)")
+    for i in range(50):
+        d.execute("INSERT INTO song_usage(song_id,clip_id,used_at) VALUES (1,NULL,?)", (float(i),))
+    song, artist = d.one("SELECT * FROM songs WHERE id=1"), d.one("SELECT * FROM artists WHERE id=1")
+    assert song_ineligible(song, artist, "", "funny", True, d, 10, 0, None) is None                 # default: no limit
+    assert "rotation limit" in song_ineligible(song, artist, "", "funny", True, d, 10, 3, None)     # still available if you ask for it
+    assert Settings().music.rotation_max == 0

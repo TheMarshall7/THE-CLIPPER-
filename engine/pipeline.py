@@ -917,6 +917,12 @@ class Engine:
                 conf_out, regs, cover, constant_bgm = [], [], 0.0, False
             else:
                 res["separation_note"] = "source-music removal is on but Demucs is not installed"
+        mute_source = False
+        if manual.get("song") and prof.evidence == "spectacle" and not content and (conf_out or constant_bgm):
+            # no commentary to protect, and you picked a song: the footage's own music is swapped out for yours
+            res["source_music_replaced"] = list(regs)
+            conf_out, regs, cover, constant_bgm = [], [], 0.0, False
+            mute_source = True
         if not ms.enabled:
             res["blocked"] = "music module disabled"
         elif not self.db.one("SELECT id FROM songs"):
@@ -941,6 +947,7 @@ class Engine:
             payoff_out = t
         ctx = {"duration": out_dur, "payoff": payoff_out, "conflicts": conf_out, "speech": speech_out,
                "category": (cand["category"] if cand else None) or "interesting_observation", "text": transcript,
+               "force_song": manual.get("song"),
                "energy": sig.get("audio_peak", 0.5), "speech_rate": len(words_out) / max(1e-6, out_dur)}
         matches, skipped = music_match.best_matches(self.db, ctx, self.s)
         if manual.get("song"):
@@ -993,8 +1000,13 @@ class Engine:
                     song = self.db.one("SELECT * FROM songs WHERE id=?", (m["song_id"],))
                     a = effective_analysis(song)
                     enter = auto_entry(drop_t, speech_out, conf_out, float(a["bar_s"]))
-                    p = place_custom(a, out_dur, enter, drop_t, conf_out, prefer_text=song["title"],
-                                     min_window=self.s.music.min_window_s) if enter is not None else None
+                    p = None
+                    if mute_source:               # replacing the footage's music: cover the whole clip, not just the end
+                        p = place_custom(a, out_dur, 0.0, drop_t, conf_out, prefer_text=song["title"],
+                                         min_window=self.s.music.min_window_s)
+                    if p is None and enter is not None:
+                        p = place_custom(a, out_dur, enter, drop_t, conf_out, prefer_text=song["title"],
+                                         min_window=self.s.music.min_window_s)
                     if p is not None:
                         p.mode = "moment_drop" if spot else "trailer_drop"
                         p.notes = [(f"{spot['by']}: big moment at {drop_t:.1f}s ({spot['reason']})" if spot else
@@ -1013,6 +1025,8 @@ class Engine:
             m["placement"] = m["placement"].to_dict()
         res["alternatives"] = [{k: m[k] for k in ("slug", "title", "fit", "why", "parts")} for m in matches]
         res["chosen"] = matches[0]
+        if mute_source:
+            res["chosen"]["bed_override"] = -24.0      # the footage's own audio drops to almost nothing under the song
         res["chosen"]["volume"] = manual.get("volume") or ms.volume_preset
         res["volume"] = res["chosen"]["volume"]
         res["conflicts_out"] = conf_out
@@ -1044,7 +1058,7 @@ class Engine:
             lvl = pre["level_db"] if p["mode"] != "underscore" else pre["level_db"] - 6
             plan = SongPlan(Path(chosen["path"]), p["song_in"], p["song_out"], p["clip_in"], p["fade_in"], p["fade_out"],
                             level_db=lvl, duck_db=pre["duck_db"], attack_ms=ms.attack_ms, release_ms=ms.release_ms,
-                            bed_db=pre["bed_db"])
+                            bed_db=chosen.get("bed_override", pre["bed_db"]))
         res = render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only)
         if plan is None or len(words_out) < 4 or not check:
             return res

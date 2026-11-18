@@ -64,7 +64,7 @@ def song_ineligible(song, artist, clip_text: str, category: str, explicit_ok: bo
         hit = next((x for x in avoid if x and x in hay), None)
         if hit:
             return f"brand avoid-list: '{hit}'"
-    if campaign_slug != song["slug"]:
+    if rotation_max > 0 and campaign_slug != song["slug"]:        # 0 = no limit: use one song for 100 clips if you like
         recent = [r["song_id"] for r in db.query("SELECT song_id FROM song_usage ORDER BY id DESC LIMIT ?", (rotation_window,))]
         if recent.count(song["id"]) >= rotation_max:
             return f"rotation limit ({rotation_max} in last {rotation_window} clips)"
@@ -126,8 +126,9 @@ def best_matches(db: Database, clip_ctx: dict, settings, top: int = 3) -> tuple[
         modes = ["payoff_drop", "reaction_tail"]
     for s in songs:
         artist = db.one("SELECT * FROM artists WHERE id=?", (s["artist_id"],))
+        picked = clip_ctx.get("force_song") == s["slug"]          # the user chose this song for the job: no rotation limit
         why = song_ineligible(s, artist, clip_ctx["text"], clip_ctx["category"], clip_ctx.get("explicit_ok", False), db,
-                              ms.rotation_window, ms.rotation_max, ms.campaign_song)
+                              ms.rotation_window, 0 if picked else ms.rotation_max, ms.campaign_song)
         if why:
             skipped.append(f"{s['title']}: {why}")
             continue

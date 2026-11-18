@@ -521,6 +521,7 @@ class App(ctk.CTk):
         f = section("MUSIC")
         add(f, "Music style", "music_style", "menu", styles[ms.style], list(styles.values()))
         add(f, "Let the AI judge where the song lands", "ai_placement", "switch", ms.ai_placement)
+        add(f, "Max repeats of one song per 10 clips (0 = no limit)", "rotation_max", "entry", ms.rotation_max)
         add(f, "Show song name tag", "sound_tag", "switch", ms.sound_tag)
         add(f, "Song card at the end", "end_card", "switch", ms.end_card)
         f = section("CLIP LENGTH")
@@ -563,6 +564,9 @@ class App(ctk.CTk):
             secs = num("hook_seconds", 0.5, 10, "Title seconds")
             cam = num("cam_ratio", 15, 60, "Face cam share")
             lead = num("lead_seconds", 1, 4, "Best-part length")
+            rot = num("rotation_max", 0, 10, "Max repeats of one song")
+            if rot is None:
+                return
             lo = num("min_length", 5, 120, "Minimum clip length")
             hi = num("max_duration", 15, 180, "Longest clip")
             if size is None or secs is None or cam is None or lead is None or lo is None or hi is None:
@@ -585,6 +589,7 @@ class App(ctk.CTk):
             c.title_style = next((k for k, t in tstyles.items() if t == vars_["title_style"].get()), "box")
             cfg.music.style = next((k for k, v in styles.items() if v == vars_["music_style"].get()), "auto")
             cfg.clips.min_length, cfg.clips.max_duration = float(lo), float(hi)
+            cfg.music.rotation_max = int(rot)
             cfg.music.ai_placement = bool(vars_["ai_placement"].get())
             cfg.music.sound_tag, cfg.music.end_card = bool(vars_["sound_tag"].get()), bool(vars_["end_card"].get())
             v = cfg.video
