@@ -13,7 +13,9 @@ release_data_backup/
 release_data_backup_pre_rebuild/
 Clips/
 Songs/
-models/
+models/*
+!models/vision/
+!models/vision/*.onnx
 database/
 config/settings.json
 *.egg-info/

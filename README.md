@@ -4,7 +4,13 @@ Local engine that finds the strongest moments in GTA 6 streams, edits them into 
 word-by-word captions and hooks, and places your own songs on the clips where they fit.
 Media processing is 100% local (FFmpeg, Faster-Whisper, OpenCV, librosa).
 
-## Install from GitHub (Windows)
+## Install from GitHub (Windows): the quick way
+
+Download the repo (green **Code** button, then **Download ZIP**, or `git clone`), unzip it, and double-click
+**`Start GTA6 Clipper.bat`**. It installs everything the first time (Python 3.11+ is the only thing you must have
+already), then opens the app. Put your own songs in the `Songs` folder it creates.
+
+### The manual way
 
 You need **Python 3.11+** and **FFmpeg**. Then, in the folder you cloned:
 
