@@ -130,6 +130,13 @@ _EDITABLE: dict[str, tuple[str, type, Any]] = {
     "end_card": ("music.end_card", bool, None),
     "end_card_seconds": ("music.end_card_seconds", float, (1.5, 3.0)),
     "remove_source_music": ("music.remove_source_music", bool, None),
+    "ducking": ("music.ducking", str, ["smooth", "tight"]),
+    "duck_hold_s": ("music.duck_hold_s", float, (0.5, 6.0)),
+    "beat_sync_cuts": ("music.beat_sync_cuts", bool, None),
+    "pre_drop_dropout": ("music.pre_drop_dropout", str, ["auto", "on", "off"]),
+    "pre_drop_seconds": ("music.pre_drop_seconds", float, (0.0, 0.8)),
+    "lyrics": ("captions.lyrics", str, ["auto", "on", "off"]),
+    "promo_build_bars": ("music.promo_build_bars", int, (1, 8)),
 }
 
 

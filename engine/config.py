@@ -64,6 +64,13 @@ class MusicSettings(BaseModel):
     end_card: bool = False            # M8: song card after the clip (only when a song was mixed in)
     end_card_seconds: float = 2.0
     remove_source_music: bool = False  # M4 option 2: Demucs strips radio/BGM so a song can be placed (needs `pip install demucs`)
+    beat_sync_cuts: bool = True        # jump cuts inside the song land on its beat grid (eighth notes)
+    pre_drop_dropout: Literal["auto", "on", "off"] = "auto"   # silence for one beat before the chorus hits (auto: music promo only)
+    promo_build_bars: int = 4          # music promo: bars of song before the chorus lands on the big moment
+    pre_drop_seconds: float = 0.0      # length of that silence; 0 = one beat of the song (max 0.5 s)
+    ducking: Literal["smooth", "tight"] = "smooth"   # smooth: steady level while people talk on and off; tight: dips under every phrase
+    duck_hold_s: float = 2.5           # smooth ducking: pauses shorter than this still count as talking
+    talk_duck_db: Optional[float] = None   # how far the song dips under talking (dB); None = the volume preset's amount
 
 
 class CaptionStyle(BaseModel):
@@ -84,6 +91,7 @@ class CaptionStyle(BaseModel):
     show_attribution: bool = True     # creator name + platform at the top of the clip
     credit_in_caption: bool = True    # creator name + link inside the post caption / description
     title_style: Literal["box", "yellow", "dark", "red", "outline"] = "box"   # look of the title card at the start
+    lyrics: Literal["auto", "on", "off"] = "auto"   # song lyrics on screen while the song plays (auto: music promo only)
 
 
 # Every AI provider the engine can judge with. kind "anthropic" uses Anthropic's own API;

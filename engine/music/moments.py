@@ -77,7 +77,7 @@ def rules_pick(events: list[dict], words_out: list[dict], conflicts: list[tuple[
 
 
 def ai_pick(provider, category: str, words_out: list[dict], events: list[dict], conflicts, out_dur: float,
-            log: Callable[[str], None] = lambda m: None) -> Optional[dict]:
+            log: Callable[[str], None] = lambda m: None, extras: str = "") -> Optional[dict]:
     lines, cur, t0 = [], [], 0.0
     for w in words_out:
         if not cur:
@@ -95,6 +95,9 @@ def ai_pick(provider, category: str, words_out: list[dict], events: list[dict], 
         "Pick the ONE best second to land a song's big drop. It should be a big moment on screen or in the audio "
         "(a crash, explosion, scream, shocking reveal, big action) where no one is saying something the viewer must hear. "
         "Shouting or exclamations may be covered by music; real sentences, jokes and punchlines may not. "
+        "Give the instant the hit STARTS (the first frame of the impact), not its loudest point. "
+        "Prefer a spot with at least 4 seconds before it for the song to build and 6 seconds after it for the chorus to play. "
+        + (extras + " " if extras else "") +
         f"Use your judgment: it can be any time between 2 and {out_dur - 3:.0f} seconds, not only a listed event. "
         'Reply as JSON: {"drop_at": <seconds>, "reason": "<one short line>", "confidence": <0-1>}')
     try:
@@ -114,9 +117,9 @@ def ai_pick(provider, category: str, words_out: list[dict], events: list[dict], 
 
 
 def pick_spot(provider, category: str, words_out: list[dict], events: list[dict], conflicts, out_dur: float,
-              use_ai: bool = True, log: Callable[[str], None] = lambda m: None) -> Optional[dict]:
+              use_ai: bool = True, log: Callable[[str], None] = lambda m: None, extras: str = "") -> Optional[dict]:
     if use_ai and provider is not None:
-        spot = ai_pick(provider, category, words_out, events, conflicts, out_dur, log)
+        spot = ai_pick(provider, category, words_out, events, conflicts, out_dur, log, extras)
         if spot:
             return spot
     return rules_pick(events, words_out, conflicts, out_dur)

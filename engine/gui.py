@@ -524,6 +524,24 @@ class App(ctk.CTk):
         add(f, "Max repeats of one song per 10 clips (0 = no limit)", "rotation_max", "entry", ms.rotation_max)
         add(f, "Show song name tag", "sound_tag", "switch", ms.sound_tag)
         add(f, "Song card at the end", "end_card", "switch", ms.end_card)
+        duckings = {"smooth": "Smooth: steady level while they talk on and off", "tight": "Tight: dips under every phrase"}
+        add(f, "When people talk over the song", "ducking", "menu", duckings[ms.ducking], list(duckings.values()))
+        dips = {None: "Volume preset's default", 6.0: "A little (-6 dB, song stays big)", 9.0: "Some (-9 dB)",
+                12.0: "Medium (-12 dB)", 15.0: "A lot (-15 dB, voice very clear)", 20.0: "Almost off (-20 dB)"}
+        add(f, "How far the song dips under talking", "talk_duck_db", "menu",
+            dips.get(ms.talk_duck_db, dips[None]), list(dips.values()))
+        add(f, "Cuts land on the song's beat", "beat_sync_cuts", "switch", ms.beat_sync_cuts)
+        f = section("MUSIC PROMO (SONG FIRST)")
+        aon = {"auto": "Auto (Music promo videos only)", "on": "On for every clip with a song", "off": "Off"}
+        add(f, "Silent beat right before the chorus hits", "pre_drop_dropout", "menu", aon[ms.pre_drop_dropout], list(aon.values()))
+        add(f, "Silence length (seconds, 0 = one beat)", "pre_drop_seconds", "entry", ms.pre_drop_seconds)
+        add(f, "Song lyrics on screen", "lyrics", "menu", aon[cs.lyrics], list(aon.values()))
+        add(f, "Build-up before the chorus (bars)", "promo_build_bars", "menu", str(ms.promo_build_bars),
+            [str(i) for i in range(1, 9)])
+        ctk.CTkLabel(f, text="Each clip can override the silent beat and lyrics in Review (Song extras).", font=font(11),
+                     text_color=MUTED, anchor="w", wraplength=480, justify="left").grid(
+            row=f.n, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 12))
+        f.n += 1
         f = section("CREDITS (video name and creator)")
         add(f, "Show the creator's name on the clip", "show_attribution", "switch", cs.show_attribution)
         add(f, "Put the creator + link in the post caption", "credit_in_caption", "switch", cs.credit_in_caption)
@@ -576,6 +594,9 @@ class App(ctk.CTk):
             rot = num("rotation_max", 0, 10, "Max repeats of one song")
             if rot is None:
                 return
+            gap = num("pre_drop_seconds", 0, 0.8, "Silence length")
+            if gap is None:
+                return
             lo = num("min_length", 5, 120, "Minimum clip length")
             hi = num("max_duration", 15, 180, "Longest clip")
             if size is None or secs is None or cam is None or lead is None or lo is None or hi is None:
@@ -603,6 +624,13 @@ class App(ctk.CTk):
             cfg.folder_names = "number" if vars_["folder_names"].get().startswith("Hide") else "video"
             cfg.music.ai_placement = bool(vars_["ai_placement"].get())
             cfg.music.sound_tag, cfg.music.end_card = bool(vars_["sound_tag"].get()), bool(vars_["end_card"].get())
+            cfg.music.ducking = next((k for k, t in duckings.items() if t == vars_["ducking"].get()), "smooth")
+            cfg.music.talk_duck_db = next((k for k, t in dips.items() if t == vars_["talk_duck_db"].get()), None)
+            cfg.music.beat_sync_cuts = bool(vars_["beat_sync_cuts"].get())
+            cfg.music.pre_drop_dropout = next((k for k, t in aon.items() if t == vars_["pre_drop_dropout"].get()), "auto")
+            cfg.music.pre_drop_seconds = float(gap)
+            c.lyrics = next((k for k, t in aon.items() if t == vars_["lyrics"].get()), "auto")
+            cfg.music.promo_build_bars = int(vars_["promo_build_bars"].get())
             v = cfg.video
             v.cam_ratio = float(cam) / 100
             v.crf = {"Standard": 20, "High (sharper, larger files)": 18, "Maximum (sharpest, largest files)": 16}.get(vars_["quality"].get(), 18)

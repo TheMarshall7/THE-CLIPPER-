@@ -87,6 +87,18 @@ def duck_envelope(n: int, speech: list[tuple[float, float]], duck_db: float, att
     return np.interp(np.arange(n) / SR * rate, np.arange(m), env).astype(np.float32)
 
 
+def merge_speech(speech: list[tuple[float, float]], hold_s: float) -> list[tuple[float, float]]:
+    """Join talking that stops and starts: gaps shorter than hold_s count as still talking, so the song sits at one
+    steady lower level through the whole stretch instead of jumping up in every little pause (pumping)."""
+    out: list[list[float]] = []
+    for a, b in sorted(speech):
+        if out and a - out[-1][1] < hold_s:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
 def _fade(n: int, fin: float, fout: float) -> np.ndarray:
     f = np.ones(n, np.float32)
     a, b = int(fin * SR), int(fout * SR)
@@ -111,6 +123,9 @@ class SongPlan:
     release_ms: int
     carve: bool = True
     bed_db: float = 0.0        # trailer style: lower the GAME audio by this much while the song plays (not under dialogue)
+    dropout: Optional[tuple[float, float]] = None   # (start, end) clip time: everything drops out right before the chorus hits
+    dropout_db: float = -30.0
+    hold_s: float = 0.0        # smooth ducking: talking with gaps shorter than this keeps the song steadily ducked (0 = per phrase)
 
 
 def mix(voice: np.ndarray, speech: list[tuple[float, float]], plan: Optional[SongPlan]) -> tuple[np.ndarray, dict]:
@@ -128,7 +143,11 @@ def mix(voice: np.ndarray, speech: list[tuple[float, float]], plan: Optional[Son
     s_db = _rms_db(song[: int(min(n, 8 * SR))])
     gain = 10 ** ((v_db + plan.level_db - s_db) / 20)
     local_speech = [(a - plan.clip_in, b - plan.clip_in) for a, b in speech if b > plan.clip_in]
-    env = duck_envelope(n, local_speech, plan.duck_db, plan.attack_ms, plan.release_ms)
+    release = plan.release_ms
+    if plan.hold_s > 0:                        # smooth: one steady dip per stretch of talking, and a gentle return
+        local_speech = merge_speech(local_speech, plan.hold_s)
+        release = max(release, 900)
+    env = duck_envelope(n, local_speech, plan.duck_db, plan.attack_ms, release)
     if plan.carve and local_speech:            # gentle 1-4 kHz dip in the song while the streamer talks
         sos = butter(2, [1000, 4000], btype="bandpass", fs=SR, output="sos")
         band = sosfiltfilt(sos, song, axis=0).astype(np.float32)
@@ -145,8 +164,30 @@ def mix(voice: np.ndarray, speech: list[tuple[float, float]], plan: Optional[Son
         src_gain = 1 - (1 - src_gain) * fade
         out[start:start + n] *= src_gain[:, None]
     out[start:start + n] += song * (gain * env)[:, None]
+    if plan.dropout:
+        out *= dropout_gain(out.shape[0], plan.dropout, plan.dropout_db)[:, None]
     return out, {"song_gain_db": round(20 * np.log10(gain + 1e-12), 2), "speech_level_db": round(v_db, 2),
                  "song_level_db": round(s_db, 2)}
+
+
+def dropout_gain(n: int, window: tuple[float, float], depth_db: float = -30.0, down_ms: float = 15.0,
+                 up_ms: float = 3.0) -> np.ndarray:
+    """Gain per sample: 1 everywhere except `window` (seconds), where the mix falls to depth_db with a short fade
+    down and comes back almost instantly, so the chorus hit lands on silence."""
+    g = np.ones(n, dtype=np.float32)
+    a, b = int(round(window[0] * SR)), int(round(window[1] * SR))
+    a, b = max(0, min(n, a)), max(0, min(n, b))
+    if b - a < 4:
+        return g
+    low = 10 ** (depth_db / 20)
+    g[a:b] = low
+    d = min(int(down_ms / 1000 * SR), (b - a) // 2)
+    if d > 0:
+        g[a:a + d] = np.linspace(1.0, low, d)
+    u = min(int(up_ms / 1000 * SR), max(0, n - b))
+    if u > 0:
+        g[b:b + u] = np.linspace(low, 1.0, u)
+    return g
 
 
 def write_wav(path: Path, a: np.ndarray) -> Path:

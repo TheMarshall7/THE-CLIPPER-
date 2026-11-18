@@ -44,6 +44,7 @@ class Profile:
     copy_note: str                              # tone for AI-written hooks/captions
     hook_style: str                             # reaction | scene | quote
     clip_word: str = "moment"
+    song_first: bool = False                    # music promo: the song is the product; moments are picked and cut to carry it
 
 
 def _w(**kw) -> dict:
@@ -125,6 +126,21 @@ PROFILES: dict[str, Profile] = {p.key: p for p in [
         "This is sports. The best moments are decisive plays, upsets, near misses and big reactions from commentators or the crowd.",
         "Hooks describe the play. Never invent scores, names or outcomes that the clip does not show.",
         "scene", "play"),
+    Profile(
+        "music_promo", "Music promo (song first)", "Clips made to sell a song: the footage carries the hook",
+        ("The song is the star: the biggest moment (explosion, crash, reveal) is found and the chorus hits on it",
+         "Moments with little talking and a big sound or picture spike rank highest",
+         "The clip is cut around the song: a few bars of build-up, the chorus on the big moment, then the hook plays out",
+         "Cuts land on the beat, the music drops out for a beat before the chorus, lyrics shown on screen",
+         "Short and loopable: 12-30 s sweet spot; whole frame kept"),
+        "spectacle", _w(hook_strength=.14, entertainment=.08, payoff=.18, emotional_intensity=.08, unexpectedness=.14,
+                        contextual_clarity=.02, shareability=.14, audio_excitement=.20),
+        False, 10, 35, (12, 30), 8, True, "frame", True, "trailer", "crazy_gameplay",
+        "These clips promote a song that will play over them. The best moments have one huge, obvious beat on screen "
+        "(an explosion, crash, big jump, takedown, reveal) that a chorus can land on, and need no dialogue to make sense. "
+        "Reject moments that only work if you hear what someone says.",
+        "Hooks tease the moment on screen in a few words; leave room for the song. Never invent what the clip does not show.",
+        "scene", "moment", True),
 ]}
 
 ORDER = list(PROFILES)
@@ -146,6 +162,8 @@ def effective_settings(settings: Settings, profile: Profile) -> Settings:
     c.target_max = max(profile.target_max, c.min_duration + 10.0)
     c.sweet_spot, c.max_setup_s = list(profile.sweet_spot), profile.max_setup_s
     s.video.jump_cuts = settings.video.jump_cuts and profile.jump_cuts
+    if profile.song_first:      # the song fills quiet stretches, so dead air is not a reason to drop a moment
+        c.max_silence_ratio = max(c.max_silence_ratio, 0.9)
     if s.music.volume_preset is None:
         s.music.volume_preset = profile.volume  # type: ignore[assignment]
     return s
@@ -190,4 +208,5 @@ def detect(title: str, music_fraction: float, vertical_keywords: list[str], word
 
 def describe() -> list[dict]:
     return [{"key": p.key, "label": p.label, "short": p.short, "ranks": list(p.ranks), "evidence": p.evidence,
-             "sweet_spot": list(p.sweet_spot), "trailer_music": p.trailer_music, "layout": p.layout} for p in PROFILES.values()]
+             "sweet_spot": list(p.sweet_spot), "trailer_music": p.trailer_music, "layout": p.layout,
+             "song_first": p.song_first} for p in PROFILES.values()]

@@ -66,10 +66,12 @@ def caption_y(style: CaptionStyle, layout: str, height: int, cam_ratio: float) -
 
 def build_ass(words: list[dict], dur: float, style: CaptionStyle, width: int, height: int, layout: str,
               cam_ratio: float, hook: Optional[str] = None, attribution: Optional[str] = None,
-              sound_tag: Optional[tuple[str, float, float]] = None, band_bottom: Optional[int] = None) -> str:
+              sound_tag: Optional[tuple[str, float, float]] = None, band_bottom: Optional[int] = None,
+              lyrics: Optional[list[tuple[str, float, float]]] = None) -> str:
     """words: [{start,end,word}] on the OUTPUT timeline (seconds from clip start).
     band_bottom: for gameplay-only clips with a blurred fill, the y where the gameplay band ends -
-    captions then sit in the clean space below it instead of over the action."""
+    captions then sit in the clean space below it instead of over the action.
+    lyrics: [(text, start, end)] song lyric lines on the output timeline, shown where the hook card sits (after it)."""
     prim = _ass_color(style.primary_color)
     hi = _ass_color(style.highlight_color)
     emph = _ass_color(style.emphasis_color)
@@ -100,6 +102,7 @@ Style: Cap,{style.font},{style.font_size},{prim},{hi},{outl},&H96000000,-1,0,0,0
 Style: Hook,{style.font},{hook_size},{hook_text},{hook_text},{hook_box},{hook_box},-1,0,0,0,100,100,0,0,{hook_bs},{hook_th},{3 if hook_bs == 1 else 0},5,90,{SAFE_RIGHT},0,1
 Style: Tag,Arial,34,&H00FFFFFF,&H00FFFFFF,&H64000000,&H64000000,-1,0,0,0,100,100,0,0,3,12,0,7,0,0,0,1
 Style: Attr,Arial,28,&H50FFFFFF,&H50FFFFFF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,8,0,0,0,1
+Style: Lyric,{style.font},{int(style.font_size * 0.62)},{prim},{prim},{outl},&H96000000,-1,-1,0,0,100,100,1,0,1,{max(3, style.outline - 2)},{style.shadow},5,90,{SAFE_RIGHT},0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -124,14 +127,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 else:
                     parts.append(tok)
             events.append(f"Dialogue: 1,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{{\\an5\\pos({cx},{y})}}" + " ".join(parts))
+    if layout == "split":
+        hook_y = int(height * cam_ratio)
+    elif band_bottom:   # centred in the space above the gameplay band
+        band_top = height - band_bottom
+        hook_y = max(SAFE_TOP + 110, (SAFE_TOP + band_top) // 2 + 20)
+    else:
+        hook_y = max(SAFE_TOP + 140, int(height * 0.24))
+    hook_end = min(style.hook_seconds, dur) if hook and style.show_hook else 0.0
+    for text, t0, t1 in lyrics or []:
+        t0, t1 = max(t0, hook_end), min(t1, dur)       # never on top of the hook card
+        if t1 - t0 < 0.3:
+            continue
+        line = _wrap(_escape(text.upper() if style.uppercase else text), 24)
+        events.append(f"Dialogue: 2,{_ts(t0)},{_ts(t1)},Lyric,,0,0,0,,{{\\an5\\pos({cx},{hook_y})\\fad(120,120)}}♪ {line}")
     if hook and style.show_hook:
-        if layout == "split":
-            hook_y = int(height * cam_ratio)
-        elif band_bottom:   # centred in the space above the gameplay band
-            band_top = height - band_bottom
-            hook_y = max(SAFE_TOP + 110, (SAFE_TOP + band_top) // 2 + 20)
-        else:
-            hook_y = max(SAFE_TOP + 140, int(height * 0.24))
         wrapped = _wrap(_escape(hook), 22)
         events.insert(0, f"Dialogue: 3,{_ts(0)},{_ts(min(style.hook_seconds, dur))},Hook,,0,0,0,,"
                          f"{{\\an5\\pos({cx},{hook_y})\\fscx90\\fscy90\\t(0,140,\\fscx100\\fscy100)\\fad(60,220)}}{wrapped}")

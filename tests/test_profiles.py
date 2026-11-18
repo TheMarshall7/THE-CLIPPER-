@@ -25,7 +25,7 @@ def test_auto_detect_from_title_and_music():
 
 
 def test_every_profile_is_complete_and_sane():
-    assert set(profiles.ORDER) == {"stream", "gameplay", "game_trailer", "movie_trailer", "podcast", "sports"}
+    assert set(profiles.ORDER) == {"stream", "gameplay", "game_trailer", "movie_trailer", "podcast", "sports", "music_promo"}
     for p in profiles.PROFILES.values():
         assert set(p.weights) == set(ScoringWeights.model_fields), p.key
         assert abs(sum(p.weights.values()) - 1.0) < 0.06, (p.key, sum(p.weights.values()))

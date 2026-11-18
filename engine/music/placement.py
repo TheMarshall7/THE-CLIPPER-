@@ -124,7 +124,8 @@ def auto_entry(payoff: float, speech: list[tuple[float, float]], conflicts: list
 
 
 def place_custom(song: dict, clip_dur: float, enter: float, drop: float,
-                 conflicts: list[tuple[float, float]], prefer_text: str = "", min_window: float = 6.0) -> Optional[Placement]:
+                 conflicts: list[tuple[float, float]], prefer_text: str = "", min_window: float = 6.0,
+                 prefer_hook: bool = False) -> Optional[Placement]:
     """User-directed placement: the song comes in at `enter` (clip time) and a chorus downbeat
     lands exactly on `drop`. Prefers the chorus where the title line is actually sung (from the
     timed lyrics), then the earliest one with enough song before it for the lead-in. The lead-in
@@ -147,16 +148,24 @@ def place_custom(song: dict, clip_dur: float, enter: float, drop: float,
     for s in song.get("sections", []):
         if s.get("label") == "chorus" or s.get("is_hook"):
             hits.append(float(bars[np.argmin(np.abs(bars - s["start"]))]))
+    if prefer_hook and song.get("hook", {}).get("downbeat") is not None:
+        hits.insert(0, float(song["hook"]["downbeat"]))     # same hook every clip: viewers learn the sound
     seen: list[float] = []
     for h in hits:  # keep order: lyric-confirmed first
         if all(abs(h - x) > 0.05 for x in seen):
             seen.append(h)
-    lead = max(0, math.floor((drop - enter) / bar + 1e-6)) * bar
+    # song first: if the build-up is a hair short of one more whole bar, take that bar and start the song a moment into
+    # it, so music plays from the very first frame instead of after a near-empty bar of silence
+    slack = 0.25 if prefer_hook else 1e-6
+    lead = max(0, math.floor((drop - enter) / bar + slack)) * bar
     for db in seen:
         song_in = db - lead
         if song_in < -1e-3:
             continue
         clip_in = drop - lead
+        if clip_in < enter:                            # trim the song's start so it begins exactly at `enter`
+            song_in += enter - clip_in
+            clip_in = enter
         limit = min(sdur, float(user_hook["end"])) if user_hook and user_hook["start"] - 0.7 <= db <= user_hook["end"] else sdur
         song_out = _bar_at_or_before(bars, min(limit, song_in + (clip_dur - clip_in)))
         clip_out = clip_in + (song_out - song_in)

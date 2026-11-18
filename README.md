@@ -117,6 +117,35 @@ with highlight + emphasis colours inside TikTok/Shorts safe zones, streamer cred
 - **Rules**: rights confirmation, campaign dates, explicit flag, creator `allows_added_music`, brand avoid-list, rotation limit, campaign mode.
 - **Exports**: mixed `video.mp4` + `video_clean_no_song.mp4` + `sound_sheet.txt` (in-app official sound instructions).
 
+## Music promo mode (song first)
+
+Pick **Video type → Music promo (song first)** on New job (CLI: `--type music_promo`). The song is the product:
+
+- **Song**: the job's song, else `music.campaign_song`, else your highest-priority song with confirmed rights. Mark its hook in
+  the hook editor and every clip uses that same hook, so viewers learn the sound.
+- **Moments**: ranked for how well they carry the song: one big hit (explosion, crash, scream), little talking over the hook,
+  no game music. The score blends the viral score with this fit (shown as `music_fit` in the moment's details).
+- **The chorus lands on the biggest hit**: the clip is cut around it (`music.promo_build_bars` bars of build-up, default 4,
+  then the hook). The hit is found to ~10 ms in the audio, and the song plays from the first frame.
+- **Beat-synced cuts** (`music.beat_sync_cuts`, on for every clip with a song): jump cuts slide onto the song's eighth-note
+  grid. Words, the payoff and the drop never move; a cut is skipped if moving it would clip a word.
+- **Drop-out** (`music.pre_drop_dropout`: auto/on/off): one beat of silence (max 0.5 s) right before the chorus hits. Skipped if
+  someone says something there. A recipe's `pre_payoff_dropout_s` sets its length on any clip.
+- **Lyrics on screen** (`captions.lyrics`: auto/on/off): the song's timed lyrics show where the hook card sits, after it. Needs
+  lyrics from song analysis. The song credit tag stays up for as long as the song plays.
+- **Turn them on/off**: Settings → *Music promo (song first)* has the silent beat (Auto/On/Off), its length, lyrics on screen
+  (Auto/On/Off) and the build-up length. Each clip can override the silent beat and lyrics in Review → *Song extras*
+  (Auto follows Settings; changing it re-renders that clip). Web dashboard: Settings → *Music promo*; API
+  `POST /api/clips/{id}/music` takes `dropout` / `lyrics` true/false.
+- **Song under talking** (Settings → Music, every clip with a song): *Smooth* (default) keeps the song at one steady lower level
+  while people talk on and off (pauses shorter than `music.duck_hold_s`, 2.5 s, still count as talking), instead of jumping up in
+  every gap. *Tight* is the old per-phrase dip. *How far the song dips under talking* sets the depth (`music.talk_duck_db`).
+- **The AI knows the plan**: the AI judge, the final ranking, the drop-spot picker, the hook/caption writer and the Review AI
+  rating are all told which song is being promoted, its tempo and mood, where the chorus lands, and whether the silent beat,
+  lyrics and smooth ducking are on (built from your live settings), so they pick moments and write copy that suit the song.
+- Promo clips skip the viral-score music gate, dead air doesn't reject a moment, and the song is kept (at a lower level)
+  even if it makes speech harder to follow. Creator permissions, game-music and singing-along rules still apply.
+
 ## AI is optional (dashboard → Settings)
 
 | mode | needs | what you get | cost / privacy |

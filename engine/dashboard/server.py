@@ -381,6 +381,8 @@ class ClipMusicReq(BaseModel):
     enter_at: Optional[float] = None  # seconds into the CLIP where the song comes in
     ignore_detected: bool = False     # user listened: no music in this clip
     volume: Optional[str] = None      # subtle | balanced | featured | trailer
+    dropout: Optional[bool] = None    # silent beat before the chorus: None = follow Settings
+    lyrics: Optional[bool] = None     # song lyrics on screen: None = follow Settings
 
 
 @app.post("/api/clips/{clip_id}/music")
@@ -418,6 +420,9 @@ def clip_music(clip_id: int, req: ClipMusicReq) -> dict:
         lay["music"]["ignore_detected"] = True
     if req.volume in ("subtle", "balanced", "featured", "trailer") and not req.off:
         lay["music"]["volume"] = req.volume
+    for k in ("dropout", "lyrics"):
+        if getattr(req, k) is not None and not req.off:
+            lay["music"][k] = getattr(req, k)
     _db.update("clips", clip_id, {"layout_json": lay})
     _db.log("info", f"re-rendering clip {clip_id} with music: {'off' if req.off else (req.song or 'auto')} {req.mode or ''}", c["stream_id"])
     _bg_render(f"clip {clip_id}", lambda: Engine(load_settings(), log=lambda m: None).render_clip(clip_id))

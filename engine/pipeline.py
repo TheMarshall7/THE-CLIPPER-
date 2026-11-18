@@ -228,9 +228,9 @@ class Engine:
         chat_out = self._step(stream_id, "chat", step_chat, "chat" in forced)
 
         def step_moments():
-            sel0 = self.find_moments(stream_id, focus, chat_out)
+            sel0 = self.find_moments(stream_id, focus, chat_out, song=song)
             if not sel0 and self._retry_as_gameplay(stream_id):
-                sel0 = self.find_moments(stream_id, focus, chat_out)
+                sel0 = self.find_moments(stream_id, focus, chat_out, song=song)
             return {"selected": sel0}
 
         sel = self._step(stream_id, "moments", step_moments, bool(forced & {"moments"}) or focus is not None)
@@ -321,7 +321,7 @@ class Engine:
     def profile_for(self, stream_id: int) -> "profiles.Profile":
         return profiles.get(self.resolve_content_type(stream_id))
 
-    def find_moments(self, stream_id: int, focus: Optional[str], chat_out: dict) -> list[int]:
+    def find_moments(self, stream_id: int, focus: Optional[str], chat_out: dict, song: Optional[str] = None) -> list[int]:
         row = self._stream(stream_id)
         sdir = self.s.stream_dir(stream_id)
         _, ex = audio_an.load(sdir / "features.npz")
@@ -348,8 +348,20 @@ class Engine:
             self.log(f"Using your instructions: \"{focus[:120]}\"" + ("" if self.provider else " (keyword mode: no AI key)"), stream_id)
         ctx = {"streamer": streamer["name"] if streamer else None, "title": row["title"], "focus": focus,
                "duration": duration, "profile": prof}
+        promo_cfg = self._promo_setup(stream_id, prof, song, duration) if prof.song_first else None
+        if promo_cfg:
+            ctx["music_brief"] = promo_cfg["brief"]     # the AI judge knows exactly how the song will be cut in
         moments.evaluate(cands, units, ctx, S, self.provider, log=lambda m: self.log(m, stream_id))
         for c in cands:
+            if promo_cfg:      # music promo: cut the clip around its biggest hit so the chorus can land on it
+                from engine.music import promo
+                ev = promo.biggest_event(ex["t"], ex["score"], c["start"], c["end"])
+                if ev:
+                    ev = (promo.refine_onset(sdir / "audio.wav", ev[0]), ev[1])
+                    c["payoff"] = c["peak"] = ev[0]
+                    c["start"], c["end"] = promo.reshape(ev[0], promo_cfg["build_s"], promo_cfg["after_s"], duration)
+                    c["starts_mid_sentence"] = False          # the song carries the opening, not a sentence
+                    c["_hit"] = ev[1]
             anchor = c.get("payoff") or c["peak"]
             c["signals"] = moments.signals_for(c["start"], c["end"], anchor, ex, chat_curve, units,
                                                S.video.max_pause if S.video.jump_cuts else None)
@@ -368,6 +380,13 @@ class Engine:
                 if bias:
                     c["total"] = round(max(0.0, min(100.0, c["total"] + bias)), 1)
                     c["ai"]["guidance_bias"] = bias
+            if promo_cfg and c.get("_hit") is not None:  # song first: blend in how well the moment carries the song
+                from engine.music import promo
+                ws_c = words_in(self.load_segments(stream_id), c["start"], c["end"])
+                fit, parts = promo.music_fit(c["payoff"], c.pop("_hit"), ws_c, promo_cfg["conflicts"], (c["start"], c["end"]),
+                                             promo_cfg["build_s"], promo_cfg["after_s"])
+                c["ai"]["music_fit"] = {"score": fit, **parts, "song": promo_cfg["slug"], "viral": c["total"]}
+                c["total"] = promo.blend(c["total"], fit)
             if self.s.review.learn:                    # what you kept / rejected in Review teaches the picks
                 from engine import learn
                 adj = learn.adjust(self.db, c["sub"], c.get("category"), c["end"] - c["start"], self.s.review.learn_strength)
@@ -381,7 +400,8 @@ class Engine:
         for c in cands:
             if not c["reject"] and id(c) not in keep_ids:
                 c["reject"] = "duplicate of a stronger overlapping moment"
-        moments.rank(survivors, self.provider, S, log=lambda m: self.log(m, stream_id), profile=prof, focus=focus or "")
+        moments.rank(survivors, self.provider, S, log=lambda m: self.log(m, stream_id), profile=prof, focus=focus or "",
+                     music_brief=ctx.get("music_brief", ""))
         for c in survivors:
             c["ai"]["rank_note"] = c.get("rank_note")
             c["sub"]["_penalties"] = c["penalties"]
@@ -398,6 +418,45 @@ class Engine:
                 selected.append(cid)
         self.log(f"{len(selected)} moments passed evaluation ({len(cands) - len(selected)} rejected)", stream_id)
         return selected
+
+    def _copy_note(self, prof, music: dict) -> str:
+        """Tone for AI-written hooks and captions, plus what the song is doing on screen so the copy doesn't fight it."""
+        ch = music.get("chosen")
+        if not ch:
+            return prof.copy_note
+        note = prof.copy_note + f" The clip has the song '{ch['title']}' by {ch['artist']} on it"
+        if ch["placement"].get("payoff_sync"):
+            note += f"; its chorus hits at {ch['placement']['payoff_sync']['clip_time']:.1f}s on the big moment"
+        note += (". The song credit is shown separately, so don't name the song in the hooks. "
+                 "Keep hooks very short (a few words) so the viewer stays on the moment and the music.")
+        from engine.music import promo
+        if promo.wants(self.s.captions.lyrics, prof.song_first):
+            note += " Song lyrics appear on screen after the title card: never quote or compete with them."
+        return note
+
+    def _promo_setup(self, stream_id: int, prof, song: Optional[str], duration: float) -> Optional[dict]:
+        """Music promo: the song the batch is cut for, its build-up / hook lengths and the game-music regions."""
+        from engine.music import promo
+        from engine.music.library import effective_analysis
+        row = promo.choose_song(self.db, self.s, song)
+        if row is None:
+            self.log("Music promo: no song with confirmed rights and a beat grid yet, so moments are ranked without one", stream_id,
+                     "warning")
+            return None
+        a = effective_analysis(row)
+        build_s, after_s = promo.window_lengths(a, self.s.music.promo_build_bars)
+        conflicts: list[tuple[float, float]] = []
+        tl_path = self.s.stream_dir(stream_id) / "music.npz"
+        if tl_path.exists():
+            tl = music_detect.load(tl_path)
+            base = music_detect.stream_baseline(tl, self.s.music.detect_threshold)
+            conflicts = [(r["start"], r["end"]) for r in
+                         music_detect.regions(tl, 0, duration, self.s.music.detect_threshold, base["constant_bgm"])]
+        self.log(f"Music promo for '{row['title']}': {build_s:.1f}s build-up, chorus on the biggest hit, "
+                 f"{after_s:.1f}s of hook after it", stream_id)
+        art = self.db.one("SELECT name FROM artists WHERE id=?", (row["artist_id"],))
+        brief = promo.ai_brief(row["title"], art["name"] if art else "", a, build_s, after_s, self.s, prof.song_first)
+        return {"slug": row["slug"], "build_s": build_s, "after_s": after_s, "conflicts": conflicts, "brief": brief}
 
     # ------------------------------------------------------------ clips
     def clip_limit(self, stream_id: int, max_clips: Optional[int] = None) -> int:
@@ -420,6 +479,10 @@ class Engine:
     def create_clips(self, stream_id: int, candidate_ids: list[int], max_clips: Optional[int], song: Optional[str] = None) -> list[int]:
         limit = self.clip_limit(stream_id, max_clips)
         ids, todo = [], []
+        if not song and self.profile_for(stream_id).song_first:
+            from engine.music import promo
+            row = promo.choose_song(self.db, self.s)
+            song = row["slug"] if row is not None else None
         for cid in candidate_ids[:limit]:
             c = self.db.one("SELECT * FROM candidates WHERE id=?", (cid,))
             existing = self.db.one("SELECT id FROM clips WHERE candidate_id=?", (cid,))
@@ -617,7 +680,7 @@ class Engine:
                 break                    # the whole video is shorter than the minimum
             words, keep_abs, out_dur = cut_plan(start, end, protect)
         # (b) reaction-tail songs need room after the last word: let the reaction breathe (<= 6 s)
-        if self.s.music.enabled and clip["score"] is not None and clip["score"] >= self.s.music.viral_gate \
+        if self.s.music.enabled and not prof.song_first and clip["score"] is not None and clip["score"] >= self.s.music.viral_gate \
                 and self.db.one("SELECT id FROM songs") and not loads(clip["layout_json"], {}).get("music", {}).get("off"):
             from engine.music.placement import preferred_modes
             sig0 = loads(cand["signals_json"], {}) if cand else {}
@@ -669,6 +732,8 @@ class Engine:
                 snapped = pick_reveal(scored, payoff_abs + off, rise_at) - off
             else:
                 snapped = snap_to_cut(payoff_abs + off, [t for t, _ in scored]) - off
+            if prof.song_first and abs(snapped - payoff_abs) > 0.3:
+                snapped = payoff_abs           # song first: the chorus follows the sound of the hit, not a far-off cut
             if abs(snapped - payoff_abs) > 0.01:
                 self.log(f"payoff moved to the scene cut at {snapped:.2f}s (audio peak {payoff_abs:.2f}s)", stream["id"])
                 payoff_abs = snapped
@@ -681,6 +746,9 @@ class Engine:
         # 4. music: conflicts -> eligibility -> top-3 matches -> placement
         music = self.plan_music(clip, stream, streamer, cand, start, end, keep_abs, words, words_out, speech_out,
                                 payoff_out, out_dur, transcript)
+        if music.get("chosen"):
+            keep_abs, keep = self._sync_to_song(clip_id, stream["id"], prof, music, keep_abs, keep, words, words_out,
+                                                start, payoff_abs)
         meta = loads(clip["metadata_json"])
         if meta is None or regenerate_meta:
             meta = gen_meta({
@@ -688,7 +756,7 @@ class Engine:
                 "url": stream["source_url"], "category": cand["category"] if cand else "moment",
                 "summary": cand["summary"] if cand else "", "transcript": transcript, "vertical": self.s.vertical,
                 "attribution_format": streamer["requires_attribution_format"] if streamer else None,
-                "profile_label": prof.label, "copy_note": prof.copy_note, "hook_style": prof.hook_style,
+                "profile_label": prof.label, "copy_note": self._copy_note(prof, music), "hook_style": prof.hook_style,
                 "clip_word": prof.clip_word,
             }, self.provider, log=lambda m: self.log(m, stream["id"]))
         if not self.s.captions.credit_in_caption and meta.get("attribution"):       # no creator credit / link in the post text
@@ -741,9 +809,18 @@ class Engine:
         if chosen and self.s.music.sound_tag:
             p = chosen["placement"]
             fmt = chosen.get("sound_tag_format") or "♪ {artist} – {title}"
-            tag = (fmt.format(artist=chosen["artist"], title=chosen["title"]), p["clip_in"] + 0.3, p["clip_in"] + 4.3)
+            # music promo: the song credit stays up for as long as the song plays (people can't Shazam what they can't name)
+            tag_end = p["clip_out"] if prof.song_first else p["clip_in"] + 4.3
+            tag = (fmt.format(artist=chosen["artist"], title=chosen["title"]), p["clip_in"] + 0.3, tag_end)
+        lyric_lines = None
+        if chosen:
+            from engine.music import promo
+            lyr_forced = (stored.get("music") or {}).get("lyrics")       # this clip's own on/off beats the setting
+            if lyr_forced if lyr_forced is not None else promo.wants(style.lyrics, prof.song_first):
+                lyric_lines = promo.lyric_lines(promo.song_lyrics(self.db, chosen["song_id"]), chosen["placement"]) or None
         ass = build_ass(words_out, out_dur, style, self.s.video.width, self.s.video.height, layout["layout"],
-                        self.s.video.cam_ratio, hook=hook, attribution=attribution, sound_tag=tag, band_bottom=band_bottom)
+                        self.s.video.cam_ratio, hook=hook, attribution=attribution, sound_tag=tag, band_bottom=band_bottom,
+                        lyrics=lyric_lines)
         ass_file = write_ass(cdir / "captions.ass", ass)
 
         # 7. render video (+ clean variant by remuxing the same picture)
@@ -934,7 +1011,7 @@ class Engine:
             res["blocked"] = "no songs in library"
         elif manual.get("off"):
             res["blocked"] = "music turned off for this clip"
-        elif (clip["score"] is None or clip["score"] < ms.viral_gate) and not manual.get("song"):
+        elif (clip["score"] is None or clip["score"] < ms.viral_gate) and not manual.get("song") and not prof.song_first:
             # the gate only governs AUTOMATIC placement; a song the user picks for this clip bypasses it
             res["blocked"] = f"viral score {clip['score']:.0f} below music gate {ms.viral_gate:.0f}"
         else:   # safety rules (permissions, source music, singing along, BGM) always apply
@@ -991,10 +1068,13 @@ class Engine:
             from engine.music.placement import auto_entry, place_custom
             cat = ctx["category"]
             from engine.music.placement import talk_ratio
-            talky = ms.style == "under" or (ms.style == "auto" and talk_ratio(speech_out, out_dur) >= 0.5)      # just talking: keep the song under the voice, no trailer drop
+            talky = not prof.song_first and (ms.style == "under" or (ms.style == "auto" and talk_ratio(speech_out, out_dur) >= 0.5))      # just talking: keep the song under the voice, no trailer drop
             # "Big moments": aim the drop at a crash / explosion / scream where nobody is saying anything that must be heard
             spot = None
-            if ms.style == "moment" or (ms.style in ("auto", "over") and not talky):
+            if prof.song_first and manual.get("drop_at") is None:
+                # song first: the clip was cut around its biggest hit (snapped to the scene cut): the chorus lands on it
+                spot = {"drop": payoff_out, "reason": "the biggest hit in the clip", "by": "song-first"}
+            elif ms.style == "moment" or (ms.style in ("auto", "over") and not talky):
                 spot = self._music_spot(stream, start, end, keep_abs, words_out, conf_out, out_dur, cat, ms)
             if spot is not None:
                 res["spot"] = spot
@@ -1006,12 +1086,12 @@ class Engine:
                     a = effective_analysis(song)
                     enter = auto_entry(drop_t, speech_out, conf_out, float(a["bar_s"]))
                     p = None
-                    if mute_source:               # replacing the footage's music: cover the whole clip, not just the end
+                    if mute_source or prof.song_first:   # song from the first frame, building into the chorus on the hit
                         p = place_custom(a, out_dur, 0.0, drop_t, conf_out, prefer_text=song["title"],
-                                         min_window=self.s.music.min_window_s)
+                                         min_window=self.s.music.min_window_s, prefer_hook=prof.song_first)
                     if p is None and enter is not None:
                         p = place_custom(a, out_dur, enter, drop_t, conf_out, prefer_text=song["title"],
-                                         min_window=self.s.music.min_window_s)
+                                         min_window=self.s.music.min_window_s, prefer_hook=prof.song_first)
                     if p is not None:
                         p.mode = "moment_drop" if spot else "trailer_drop"
                         p.notes = [(f"{spot['by']}: big moment at {drop_t:.1f}s ({spot['reason']})" if spot else
@@ -1033,9 +1113,47 @@ class Engine:
         if mute_source:
             res["chosen"]["bed_override"] = -24.0      # the footage's own audio drops to almost nothing under the song
         res["chosen"]["volume"] = manual.get("volume") or ms.volume_preset
+        res["chosen"]["song_first"] = prof.song_first
         res["volume"] = res["chosen"]["volume"]
         res["conflicts_out"] = conf_out
         return res
+
+    def _sync_to_song(self, clip_id: int, stream_id: int, prof, music: dict, keep_abs, keep, words, words_out,
+                      start: float, payoff_abs: float):
+        """Lock the edit to the song: jump cuts onto its beat grid, and a one-beat dropout right before the chorus hits.
+        Neither moves the words, the payoff or the chorus downbeat (see promo.snap_cuts_to_beats)."""
+        from engine.music import promo
+        from engine.music.library import effective_analysis
+        chosen, ms = music["chosen"], self.s.music
+        row = self.db.one("SELECT * FROM songs WHERE id=?", (chosen["song_id"],))
+        if row is None:
+            return keep_abs, keep
+        a, pl = effective_analysis(row), chosen["placement"]
+        if ms.beat_sync_cuts and len(keep_abs) > 1:
+            new_keep, shifts = promo.snap_cuts_to_beats(keep_abs, promo.out_beats(a, pl), words,
+                                                        (pl["clip_in"], pl["clip_out"]), fixed=[payoff_abs])
+            if shifts:
+                keep_abs, keep = new_keep, [(x - start, y - start) for x, y in new_keep]
+                music["beat_sync"] = {"cuts_moved": len(shifts), "max_shift_s": max(abs(d) for d in shifts)}
+                self.log(f"clip {clip_id}: {len(shifts)} cuts moved onto the beat", stream_id)
+        recipe = self.recipe_for(clip_id) or {}
+        r_len = (recipe.get("audio") or {}).get("pre_payoff_dropout_s")
+        row_c = self.db.one("SELECT layout_json FROM clips WHERE id=?", (clip_id,))
+        forced = ((loads(row_c["layout_json"], {}) or {}).get("music") or {}).get("dropout") if row_c else None
+        want = forced if forced is not None else (
+            ms.pre_drop_dropout != "off" and bool(r_len or promo.wants(ms.pre_drop_dropout, prof.song_first)))
+        if want:
+            length = float(r_len) if r_len else (ms.pre_drop_seconds or None)
+            win = promo.dropout_window(a, pl, length)
+            # never silence a line the viewer has to hear (unless you switched the drop on for this clip yourself)
+            if win and (forced or promo.talk_share(promo.meaningful(words_out), win[0], win[1]) < 0.2):
+                chosen["dropout"] = list(win)
+                music["dropout"] = {"start": win[0], "end": win[1], "by": "you" if forced else "auto"}
+            elif not win:
+                music["dropout_note"] = "no chorus drop in this clip to go silent before"
+        elif forced is False:
+            music["dropout_note"] = "drop turned off for this clip"
+        return keep_abs, keep
 
     def _music_spot(self, stream, start, end, keep_abs, words_out, conf_out, out_dur, category, ms) -> Optional[dict]:
         """Where the song should land: a big non-speech moment (AI judgment first, then rules). None if there isn't one."""
@@ -1044,8 +1162,15 @@ class Engine:
             fpath = self.s.stream_dir(stream["id"]) / "features.npz"
             events = moments.loud_events(fpath, start, end, remap, keep_abs) if fpath.exists() else []
             prov = self.provider if (ms.ai_placement and self.s.ai.mode == "api") else None
+            from engine.music import promo
+            prof = self.profile_for(stream["id"])
+            extras = []
+            if ms.pre_drop_dropout == "on" or promo.wants(ms.pre_drop_dropout, prof.song_first):
+                extras.append("All sound cuts out for one beat right before your spot, so nothing important may be said there.")
+            if ms.ducking == "smooth":
+                extras.append("While people talk the song sits at a steady lower level.")
             return moments.pick_spot(prov, category, words_out, events, conf_out, out_dur, use_ai=prov is not None,
-                                     log=lambda m: self.log(m, stream["id"]))
+                                     log=lambda m: self.log(m, stream["id"]), extras=" ".join(extras))
         except Exception as e:               # choosing a spot is a refinement: any problem falls back to the normal placement
             self.log(f"music spot search skipped: {e}", stream["id"], "warning")
             return None
@@ -1062,8 +1187,11 @@ class Engine:
             pre = PRESETS.get(chosen.get("volume") or ms.volume_preset, PRESETS["balanced"])
             lvl = pre["level_db"] if p["mode"] != "underscore" else pre["level_db"] - 6
             plan = SongPlan(Path(chosen["path"]), p["song_in"], p["song_out"], p["clip_in"], p["fade_in"], p["fade_out"],
-                            level_db=lvl, duck_db=pre["duck_db"], attack_ms=ms.attack_ms, release_ms=ms.release_ms,
-                            bed_db=chosen.get("bed_override", pre["bed_db"]))
+                            level_db=lvl, duck_db=ms.talk_duck_db if ms.talk_duck_db is not None else pre["duck_db"],
+                            attack_ms=ms.attack_ms, release_ms=ms.release_ms,
+                            hold_s=ms.duck_hold_s if ms.ducking == "smooth" else 0.0,
+                            bed_db=chosen.get("bed_override", pre["bed_db"]),
+                            dropout=tuple(chosen["dropout"]) if chosen.get("dropout") else None)
         res = render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only)
         if plan is None or len(words_out) < 4 or not check:
             return res
@@ -1079,6 +1207,9 @@ class Engine:
                 plan.level_db -= 4.0
                 plan.duck_db += 3.0
                 res.update(render_tracks(src, src_start, dur, keep, speech_out, cdir, v.loudness_lufs, tp, plan, voice_only))
+            if chosen.get("song_first"):         # music promo: the song is the point; keep it at the reduced level
+                res["intelligibility"]["kept_for_promo"] = True
+                return res
             res.pop("mixed", None)
             res["music_dropped"] = f"speech intelligibility dropped {base_acc - acc:.0%} even at reduced music level"
         except Exception as e:  # never block the clip on the check itself

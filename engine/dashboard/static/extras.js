@@ -152,7 +152,9 @@
     ['Video', [['width', 'Width', 's'], ['height', 'Height', 's'], ['encoder', 'Encoder', 's'], ['gameplay_mode', 'Gameplay framing', 's']]],
     ['Captions', [['cap_font', 'Font', 't'], ['cap_size', 'Size', 'n'], ['cap_highlight', 'Highlight colour', 't'], ['cap_words', 'Words per line', 'n'], ['cap_position', 'Position', 's'], ['cap_animation', 'Animation', 's']]],
     ['Processing', [['storage_dir', 'Storage location (folder)', 't'], ['max_concurrent_jobs', 'Streams at once', 'n'], ['priority', 'Processing priority', 's']]],
-    ['Music extras', [['end_card', 'Add an end card with the song (YouTube Shorts)', 'b'], ['end_card_seconds', 'End card length (s)', 'n'], ['remove_source_music', 'Remove game radio / BGM so a song can be placed (needs Demucs)', 'b']]]];
+    ['Music extras', [['end_card', 'Add an end card with the song (YouTube Shorts)', 'b'], ['end_card_seconds', 'End card length (s)', 'n'], ['remove_source_music', 'Remove game radio / BGM so a song can be placed (needs Demucs)', 'b']]],
+    ['Song under talking', [['ducking', 'When people talk on and off (smooth = steady level, tight = dips per phrase)', 's'], ['duck_hold_s', 'Pauses shorter than this still count as talking (s)', 'n'], ['beat_sync_cuts', 'Cuts land on the song's beat', 'b']]],
+    ['Music promo (song first)', [['pre_drop_dropout', 'Silent beat before the chorus (auto = Music promo only)', 's'], ['pre_drop_seconds', 'Silence length (s, 0 = one beat)', 'n'], ['lyrics', 'Song lyrics on screen (auto = Music promo only)', 's'], ['promo_build_bars', 'Build-up before the chorus (bars)', 'n']]]];
   async function loadEng() {
     const r = await api('/api/settings/engine'); const v = r.values;
     $('#engbody').innerHTML = F.map(([g, fs]) => `<h3 style="margin-top:16px">${g}</h3><div class="row">${fs.map(([k, l, t]) =>

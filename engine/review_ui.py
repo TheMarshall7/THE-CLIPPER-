@@ -240,6 +240,22 @@ class ReviewPage:
                      text_color=G.PINK, anchor="w").grid(row=4, column=0, sticky="w", padx=24, pady=(18, 4))
         self.chips = ctk.CTkFrame(right, fg_color="transparent")
         self.chips.grid(row=5, column=0, sticky="ew", padx=20)
+        # song extras for this clip: Auto follows Settings, On / Off is this clip's own choice (re-renders the clip)
+        self.extras = ctk.CTkFrame(right, fg_color="transparent")
+        self.extras.grid(row=6, column=0, sticky="ew", padx=20, pady=(14, 18))
+        self.extras.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(self.extras, text="SONG EXTRAS  (this clip only, re-renders it)", font=G.font(12, "bold"), text_color=G.PINK,
+                     anchor="w").grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 6))
+        self.extra_vars: dict[str, ctk.StringVar] = {}
+        for n, (key, label) in enumerate((("dropout", "Silent beat before the chorus"), ("lyrics", "Lyrics on screen")), start=1):
+            ctk.CTkLabel(self.extras, text=label, font=G.font(13), text_color=G.TEXT, anchor="w").grid(
+                row=n, column=0, sticky="w", padx=4, pady=4)
+            v = self.extra_vars[key] = ctk.StringVar(value="Auto")
+            ctk.CTkSegmentedButton(self.extras, values=["Auto", "On", "Off"], variable=v, selected_color=G.VIOLET,
+                                   command=lambda val, k=key: self.set_extra(k, val)).grid(row=n, column=1, sticky="e", padx=4, pady=4)
+        self.extra_note = ctk.CTkLabel(self.extras, text="", font=G.font(11), text_color=G.MUTED, anchor="w", justify="left",
+                                       wraplength=500)
+        self.extra_note.grid(row=3, column=0, columnspan=2, sticky="w", padx=4)
         self.chip_btns: dict[str, ctk.CTkButton] = {}
         for n, r in enumerate(review.REASONS, start=1):
             b = G.button(self.chips, f"{n}  {r}", lambda r=r: self.pick_reason(r), height=34, fg_color=G.CARD2)
@@ -351,6 +367,7 @@ class ReviewPage:
         self.info.configure(text=f"{self.i + 1} of {len(self.queue)}   ·   {title or '(no title)'}")
         self.detail.configure(text="\n".join(lines))
         self._titles(c)
+        self._show_extras(c, music)
         path = Path(c["video_path"])
         path = path if path.is_absolute() else self.app.ROOT / path
         if path.exists():
@@ -372,6 +389,56 @@ class ReviewPage:
                           ).pack(fill="x", padx=4, pady=3)
         if not hooks:
             ctk.CTkLabel(self.titles, text="(no title options saved for this clip)", text_color=self.G.MUTED).pack(anchor="w", padx=4)
+
+    def _show_extras(self, c, music: dict) -> None:
+        if not c or not music.get("song"):
+            self.extras.grid_remove()
+            return
+        self.extras.grid()
+        own = (loads(c["layout_json"], {}) or {}).get("music") or {}
+        for key, v in self.extra_vars.items():
+            v.set({True: "On", False: "Off"}.get(own.get(key), "Auto"))
+        notes = []
+        if music.get("dropout"):
+            d = music["dropout"]
+            notes.append(f"Silent beat: {d['start']:.2f}-{d['end']:.2f}s")
+        elif music.get("dropout_note"):
+            notes.append(f"Silent beat: {music['dropout_note']}")
+        self.extra_note.configure(text="   ·   ".join(notes))
+
+    def set_extra(self, key: str, label: str) -> None:
+        """Auto / On / Off for this clip's silent beat or lyrics, then re-render it."""
+        if self.busy or self.i >= len(self.queue):
+            return
+        c = self.queue[self.i]
+        lay = loads(c["layout_json"], {}) or {}
+        m = dict(lay.get("music") or {})
+        val = {"On": True, "Off": False}.get(label)
+        if m.get(key) == val:
+            return
+        if val is None:
+            m.pop(key, None)
+        else:
+            m[key] = val
+        lay["music"] = m
+        self.db.update("clips", c["id"], {"layout_json": lay})
+        self._rerender(c, f"Re-rendering with {'the silent beat' if key == 'dropout' else 'lyrics'} {label.lower()}…")
+
+    def _rerender(self, c, text: str) -> None:
+        self.busy = True
+        self.player.stop()
+        self.info.configure(text=text)
+
+        def work() -> None:
+            try:
+                from engine.config import load_settings
+                from engine.pipeline import Engine
+                Engine(load_settings(), log=lambda m: None).render_clip(c["id"])
+            except Exception as e:
+                self.app.after(0, lambda m=str(e): self.app._log(f"Re-render failed: {m}"))
+            self.busy = False
+            self.app.after(0, self.refresh)
+        threading.Thread(target=work, daemon=True).start()
 
     def retitle(self, n: int) -> None:
         if self.busy or self.i >= len(self.queue):

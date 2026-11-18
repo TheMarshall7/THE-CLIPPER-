@@ -305,6 +305,8 @@ def evaluate(cands: list[dict], units: list[dict], ctx: dict, settings: Settings
              f"and payoff points; they outrank your defaults): \"{ctx['focus']}\"") if ctx.get("focus") else ""
     prof = ctx.get("profile") or profiles.get("stream")
     system = SYSTEM.format(vertical=settings.vertical, label=prof.label, guidance=prof.guidance)
+    if ctx.get("music_brief"):
+        system += "\n\n" + ctx["music_brief"]
     evidence_note = ("" if prof.evidence == "speech" else
                      "NOTE: the transcript only has spoken words. In this video type the picture and sound carry the moment, "
                      "so rely on the signal summary (audio peak, contrast with what came before) as well.\n")
@@ -416,15 +418,25 @@ def guidance_bias(text: str, haystack: str) -> float:
     return min(18.0, 6.0 * hits_p) - min(24.0, 12.0 * hits_n)
 
 
-def rank(cands: list[dict], provider, settings: Settings, log: Callable[[str], None] = print, profile=None, focus: str = "") -> None:
+def _fit_note(c: dict) -> str:
+    f = (c.get("ai") or {}).get("music_fit")
+    if not f:
+        return ""
+    return (f" | song fit {f['score']:.0f} (hit {f['hit']:.0f}, clear of talking {f['clear']:.0f}, "
+            f"no game music {f['no_music']:.0f})")
+
+
+def rank(cands: list[dict], provider, settings: Settings, log: Callable[[str], None] = print, profile=None, focus: str = "",
+         music_brief: str = "") -> None:
     """Blend a comparative ranking into each candidate's total (in place). Model-only."""
     if provider is None or len(cands) < 2 or not settings.clips.final_ranking:
         return
     items = "\n".join(f"id={i}: [{c['category']}] {c['summary']} | hook: \"{c['signals']['hook_text'][:80]}\" "
-                      f"| score {c['total']:.0f}" for i, c in enumerate(cands))
+                      f"| score {c['total']:.0f}" + _fit_note(c) for i, c in enumerate(cands))
     try:
         prof = profile or profiles.get("stream")
-        res = provider.complete_json(SYSTEM.format(vertical=settings.vertical, label=prof.label, guidance=prof.guidance),
+        res = provider.complete_json(SYSTEM.format(vertical=settings.vertical, label=prof.label, guidance=prof.guidance)
+                                     + ("\n\n" + music_brief if music_brief else ""),
                                      RANK_PROMPT.format(vertical=settings.vertical, label=prof.label, items=items)
                                      + (f"\nThe user's own instructions (they outrank your defaults): \"{focus}\"" if focus else ""))
         order = [int(x) for x in res.get("order", []) if str(x).lstrip("-").isdigit() and 0 <= int(x) < len(cands)]

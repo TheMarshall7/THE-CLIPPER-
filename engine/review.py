@@ -253,13 +253,28 @@ def _rule_hit(db: Database, c: dict, rs) -> Optional[str]:
     return None
 
 
+def _music_line(c: dict) -> str:
+    """What the song does in this clip, so the AI rates it as a music post when it is one."""
+    m = (loads(c.get("qc_json"), {}) or {}).get("music") or {}
+    if not m.get("song"):
+        return "Music: none added"
+    bits = [f"Music: song '{m['song']}' added ({str(m.get('mode', '')).replace('_', ' ')})"]
+    if (m.get("spot") or {}).get("drop") is not None:
+        bits.append(f"chorus hits at {m['spot']['drop']:.1f}s on {m['spot'].get('reason', 'the big moment')}")
+    if m.get("dropout"):
+        bits.append("one beat of silence right before it")
+    bits.append("rate it as a music promo too: does the moment make the song hit harder?")
+    return "; ".join(bits)
+
+
 def _ai_rate(db: Database, c: dict, provider, log) -> tuple[Optional[float], Optional[str]]:
     cand = db.one("SELECT category, summary FROM candidates WHERE id=?", (c.get("candidate_id"),)) if c.get("candidate_id") else None
     hooks = loads(c.get("hooks_json"), []) or []
     meta = loads(c.get("metadata_json"), {}) or {}
     prompt = (f"Short-form clip for TikTok/Shorts.\nMoment type: {cand['category'] if cand else 'unknown'}\n"
               f"What happens: {(cand['summary'] if cand else '') or meta.get('description', '')}\n"
-              f"Title text: {hooks[0] if hooks else meta.get('title', '')}\nLength: {(c['end'] - c['start']):.0f}s\n\n"
+              f"Title text: {hooks[0] if hooks else meta.get('title', '')}\nLength: {(c['end'] - c['start']):.0f}s\n"
+              + _music_line(c) + "\n\n"
               'Rate how likely this is to hold viewers and be shared, 1-10, and give a one-line reason. '
               'Reply as JSON: {"rating": <number>, "note": "<short reason>"}')
     try:
