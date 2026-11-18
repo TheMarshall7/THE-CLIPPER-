@@ -39,7 +39,7 @@ if errorlevel 1 (
   if errorlevel 1 (
     echo.
     echo FFmpeg was installed but this window cannot see it yet.
-    echo Close this window and double-click "Start GTA6 Clipper.bat" again.
+    echo Close this window and double-click "Launch GTA6 Clipper.bat" again.
     pause
     exit /b 0
   )

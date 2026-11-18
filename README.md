@@ -7,7 +7,7 @@ Media processing is 100% local (FFmpeg, Faster-Whisper, OpenCV, librosa).
 ## Install from GitHub (Windows): the quick way
 
 Download the repo (green **Code** button, then **Download ZIP**, or `git clone`), unzip it, and double-click
-**`Start GTA6 Clipper.bat`**. It installs everything the first time (Python 3.11+ is the only thing you must have
+**`Launch GTA6 Clipper.bat`**. It installs everything the first time (Python 3.11+ is the only thing you must have
 already), then opens the app. Put your own songs in the `Songs` folder it creates.
 
 ### The manual way
