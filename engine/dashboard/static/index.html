@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTA 6 Clip Engine</title>
+<style>
+  :root {
+    --bg: #0a0806; --panel: #141110; --panel2: #1b1714; --line: #3a2a1e;
+    --text: #ece6dc; --muted: #9a9289; --accent: #e8651a; --accent-ink: #0a0806;
+    --good: #6fbf73; --warn: #f2c14e; --bad: #e5484d; --info: #c98a55;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  .brand { font-weight: 800; letter-spacing: .3px; font-size: 16px; }
+  .brand span { color: var(--accent); }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  nav button { background: none; border: 0; color: var(--muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; font: inherit; }
+  nav button.active, nav button:hover { background: var(--panel2); color: var(--text); }
+  .pill { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.busy { background: var(--accent); box-shadow: 0 0 0 4px rgba(232,101,26,.15); animation: pulse 1.2s infinite; }
+  .dot.idle { background: var(--good); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+  section { display: none; } section.active { display: block; }
+  h2 { font-size: 18px; margin: 0 0 14px; }
+  h3 { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
+  .grid { display: grid; gap: 14px; }
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); margin-bottom: 18px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  .tile .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .k { color: var(--muted); font-size: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; overflow-x: auto; }
+  .grid > * { min-width: 0; }
+  body { overflow-x: hidden; }
+  .two { grid-template-columns: 1.4fr 1fr; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+  .steps { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .step { padding: 6px 10px; border-radius: 999px; background: var(--panel2); color: var(--muted); font-size: 12px; border: 1px solid var(--line); }
+  .step.done { color: var(--good); border-color: rgba(61,220,132,.35); }
+  .step.run { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .bar { height: 6px; background: var(--panel2); border-radius: 99px; overflow: hidden; margin-top: 10px; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .5s; }
+  .log { background: #0b0908; border: 1px solid var(--line); border-radius: 10px; height: 340px; overflow-y: auto;
+         font: 12px/1.55 Consolas, "Cascadia Mono", monospace; padding: 10px 12px; }
+  .log div { white-space: pre-wrap; word-break: break-word; }
+  .log .t { color: var(--muted); } .log .error { color: var(--bad); } .log .s { color: var(--info); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+  input, select { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+                  padding: 10px 12px; border-radius: 8px; font: inherit; }
+  input:focus, select:focus { outline: 2px solid rgba(232,101,26,.4); border-color: var(--accent); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+  .btn { background: var(--accent); color: var(--accent-ink); border: 0; padding: 10px 16px; border-radius: 8px; font: inherit;
+         font-weight: 700; cursor: pointer; }
+  .btn.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); font-weight: 500; }
+  .btn.good { background: var(--good); } .btn.bad { background: var(--bad); color: #fff; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; background: var(--panel2); color: var(--muted); }
+  .badge.good { background: rgba(61,220,132,.15); color: var(--good); }
+  .badge.warn { background: rgba(255,176,32,.15); color: var(--warn); }
+  .badge.bad { background: rgba(255,90,95,.15); color: var(--bad); }
+  .badge.run { background: rgba(232,101,26,.15); color: var(--accent); }
+  .clips { grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+  .clip { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
+  .clip video { width: 100%; aspect-ratio: 9/16; max-height: 520px; background: #000; display: block; object-fit: contain; }
+  .clip .body { padding: 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .score { font-size: 22px; font-weight: 800; }
+  .score.hi { color: var(--good); } .score.mid { color: var(--accent); } .score.lo { color: var(--muted); }
+  .hook { font-weight: 600; }
+  .subs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 11px; color: var(--muted); }
+  .sub { display: flex; align-items: center; gap: 6px; }
+  .sub .m { flex: 1; height: 4px; background: var(--panel2); border-radius: 9px; overflow: hidden; }
+  .sub .m > i { display: block; height: 100%; background: var(--info); }
+  .music { font-size: 12px; background: var(--panel2); border-radius: 8px; padding: 8px 10px; color: var(--muted); }
+  .music b { color: var(--text); }
+  .actions { display: flex; gap: 8px; margin-top: auto; flex-wrap: wrap; }
+  .toolbar { display: flex; gap: 10px; align-items: end; margin-bottom: 16px; flex-wrap: wrap; }
+  .toolbar > div { min-width: 160px; }
+  .empty { color: var(--muted); padding: 30px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel2); border: 1px solid var(--line); padding: 12px 16px;
+           border-radius: 10px; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,.4); display: none; z-index: 10; }
+  .modes { display: grid; gap: 8px; }
+  .mode { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+  .mode.sel { border-color: var(--accent); background: rgba(232,101,26,.06); }
+  .mode input { width: auto; margin-top: 3px; }
+  .mode small { color: var(--muted); display: block; }
+  textarea { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 10px 12px;
+             border-radius: 8px; font: inherit; resize: vertical; }
+  textarea:focus { outline: 2px solid rgba(232,101,26,.4); border-color: var(--accent); }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 22px; text-align: center; color: var(--muted); transition: .15s; }
+  .drop.over { border-color: var(--accent); background: rgba(232,101,26,.06); color: var(--text); }
+  .drop b { color: var(--text); } a { color: var(--accent); }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 640px) { .row3 { grid-template-columns: 1fr; } }
+  label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 13px; margin: 0; }
+  label.check input { width: auto; }
+  .up { margin-top: 10px; background: var(--panel2); border-radius: 8px; padding: 10px 12px; font-size: 12px; }
+  .up .bar { margin-top: 6px; }
+  audio { height: 32px; width: 220px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">GTA 6 <span>Clip Engine</span></div>
+  <nav id="nav">
+    <button data-tab="dash" class="active">Dashboard</button>
+    <button data-tab="new">New job</button>
+    <button data-tab="streams">Streams</button>
+    <button data-tab="clips">Clips</button>
+    <button data-tab="music">Music</button>
+    <button data-tab="creators">Creators</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div class="pill"><div id="wdot" class="dot"></div><span id="wtext">connecting…</span>
+    <button class="btn ghost" id="quit" style="padding:5px 10px; margin-left:10px" title="Stop the engine and close its window">Quit</button></div>
+</header>
+
+<main>
+  <!-- DASHBOARD -->
+  <section id="dash" class="active">
+    <div class="grid tiles" id="tiles"></div>
+    <div class="grid two">
+      <div class="card">
+        <h3>Now processing</h3>
+        <div id="current"><div class="hint">Nothing running. Start one from <b>New job</b>.</div></div>
+        <h3 style="margin-top:22px">Live log</h3>
+        <div class="log" id="log"></div>
+      </div>
+      <div class="grid" style="align-content:start">
+        <div class="card">
+          <h3>AI</h3>
+          <div class="hint" id="aistatus"></div>
+          <div style="margin-top:10px"><button class="btn ghost" onclick="document.querySelector('#nav button[data-tab=settings]').click()">AI settings</button></div>
+        </div>
+        <div class="card">
+          <h3>Engine health</h3>
+          <div id="health" class="hint">checking…</div>
+          <div id="engineinfo" class="hint" style="margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NEW JOB -->
+  <section id="new">
+    <div class="card" style="max-width:760px">
+      <h2>Clip streams</h2>
+      <label>Stream links (one per line)</label>
+      <textarea id="src" rows="4" placeholder="https://www.twitch.tv/videos/…&#10;https://www.youtube.com/watch?v=…&#10;C:\Videos\stream.mp4"></textarea>
+      <div class="hint">YouTube, Twitch or Kick VOD links, or a file path on this computer. Paste as many as you like; they run one after another.</div>
+      <label>…or upload video files</label>
+      <div class="drop" id="vdrop"><input type="file" id="vfile" accept="video/*,.mkv,.flv,.ts" multiple hidden>
+        <b>Drop video files here</b> or <a href="#" id="vpick">choose files</a><div class="hint">mp4, mkv, mov, webm, flv, ts</div></div>
+      <div id="vuploads"></div>
+      <div class="row">
+        <div><label>Streamer name (optional)</label><input id="streamer" placeholder="defaults to the channel name"></div>
+        <div><label>Creator permission</label>
+          <select id="perm">
+            <option value="">keep current / unknown</option>
+            <option value="explicitly_authorized">Explicitly authorized</option>
+            <option value="official_clipping_program">Official clipping program</option>
+            <option value="permission_requested">Permission requested</option>
+            <option value="unknown">Unknown</option>
+            <option value="not_authorized">Not authorized</option>
+          </select></div>
+      </div>
+      <label>Video type</label>
+      <select id="ctype"><option value="auto">Auto-detect (recommended)</option></select>
+      <div class="hint" id="ctypehelp" style="margin-top:8px"></div>
+      <div class="row">
+        <div><label>Focus (optional)</label><input id="focus" placeholder="e.g. funny reactions, shocking discoveries"></div>
+        <div><label>Max clips from this stream</label><input id="maxclips" type="number" min="1" max="30" placeholder="6"></div>
+      </div>
+      <div style="margin-top:18px; display:flex; gap:10px; align-items:center">
+        <button class="btn" id="go">Start processing links</button>
+        <span class="hint" id="gomsg"></span>
+      </div>
+      <div class="hint" style="margin-top:14px">Only clip creators who allow it. Clips from creators marked unknown stay out of the publish-ready queue.</div>
+    </div>
+  </section>
+
+  <!-- STREAMS -->
+  <section id="streams">
+    <h2>Streams</h2>
+    <div class="card"><table><thead><tr><th>#</th><th>Streamer</th><th>Title</th><th>Length</th><th>Video type</th><th>Status</th><th>Steps (seconds)</th><th>Clips</th><th></th></tr></thead>
+      <tbody id="streamrows"></tbody></table></div>
+    <div class="card" id="momentscard" style="margin-top:16px; display:none">
+      <h3 id="momentstitle">Moments</h3>
+      <div class="hint" style="margin-bottom:10px">Every moment the brain evaluated. Rejected ones show why; you can still render any of them.</div>
+      <table><thead><tr><th>Score</th><th>Time</th><th>Type</th><th>Verdict</th><th></th></tr></thead><tbody id="momentrows"></tbody></table>
+    </div>
+  </section>
+
+  <!-- CLIPS -->
+  <section id="clips">
+    <div class="toolbar">
+      <div><label>Min score</label><input id="minscore" type="number" value="0" min="0" max="100"></div>
+      <div><label>Show</label><select id="approvalf"><option value="">All</option><option value="pending">Needs review</option>
+        <option value="approved">Approved</option><option value="rejected">Rejected</option></select></div>
+      <div style="margin-left:auto; display:flex; gap:8px">
+        <button class="btn" id="exportbtn">Export approved</button>
+        <button class="btn ghost" id="openexp">Open exports folder</button>
+      </div>
+    </div>
+    <div class="grid clips" id="cliplist"></div>
+  </section>
+
+  <!-- MUSIC -->
+  <section id="music">
+    <div class="grid two" style="margin-bottom:16px">
+      <div class="card">
+        <h2>Upload a song</h2>
+        <div class="drop" id="sdrop"><input type="file" id="sfile" accept="audio/*,.wav,.mp3,.flac,.m4a" hidden>
+          <b id="sdroptext">Drop a song file here</b> or <a href="#" id="spick">choose a file</a>
+          <div class="hint">WAV preferred · MP3, FLAC, M4A accepted</div></div>
+        <div class="row">
+          <div><label>Song title</label><input id="stitle" placeholder="Tweakin"></div>
+          <div><label>Artist</label><input id="sartist" list="artistlist" placeholder="Moqemae"><datalist id="artistlist"></datalist></div>
+        </div>
+        <div class="row">
+          <div><label>Campaign priority</label><select id="sprio"><option value="5">5 · push hard</option><option value="4">4</option>
+            <option value="3" selected>3 · normal</option><option value="2">2</option><option value="1">1 · rarely</option></select></div>
+          <div><label>&nbsp;</label><label class="check"><input type="checkbox" id="sexplicit"> Explicit lyrics</label></div>
+        </div>
+        <label>Official sound names (optional, only if the song is in the app's music library)</label>
+        <div class="row3">
+          <input id="stiktok" placeholder="TikTok sound"><input id="sinsta" placeholder="Instagram audio"><input id="syt" placeholder="YouTube Shorts sound">
+        </div>
+        <label class="check" style="margin-top:14px"><input type="checkbox" id="srights"> I own or control the rights to this recording</label>
+        <div style="margin-top:14px; display:flex; gap:10px; align-items:center">
+          <button class="btn" id="supload">Upload &amp; analyze</button><span class="hint" id="smsg"></span></div>
+        <div id="simports"></div>
+      </div>
+      <div class="card">
+        <h2>Artist brand profile</h2>
+        <div class="row"><div><label>Artist</label><input id="aname" list="artistlist" placeholder="Artist name"></div>
+          <div><label>Music volume</label><select id="avol"><option value="subtle">Subtle</option><option value="balanced" selected>Balanced</option><option value="featured">Featured</option></select></div></div>
+        <label>Brand description</label><input id="adesc" placeholder="Late-night, cinematic, unpredictable…">
+        <label>Good-fit moments (comma separated)</label><input id="agood" placeholder="chase, getaway, crazy gameplay, flex">
+        <label>Never put the song on (comma separated)</label><input id="aavoid" placeholder="tragedy, slur, sexual, mocking someone">
+        <label>Call to action options (comma separated)</label><input id="acta" placeholder="Out now everywhere, Full song in bio">
+        <label>Sound tag format</label><input id="atag" placeholder="♪ {artist} – {title}">
+        <div style="margin-top:14px"><button class="btn ghost" id="asave">Save profile</button></div>
+      </div>
+    </div>
+    <div class="card"><h3>Song library</h3>
+      <table><thead><tr><th>Song</th><th>BPM / key</th><th>Mood</th><th>Sections (hook highlighted)</th><th>Priority</th><th>Used</th><th></th></tr></thead>
+      <tbody id="songrows"></tbody></table></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="settings">
+    <div class="card" style="max-width:760px">
+      <h2>AI</h2>
+      <div class="hint" style="margin-bottom:12px">The engine works fully without AI, using rules. Adding your own API key makes it read what is
+        actually said to judge context and payoff, rank clips against each other, and write hooks and captions specific to each clip.</div>
+      <div class="modes">
+        <label class="mode" id="m_heuristic"><input type="radio" name="aimode" value="heuristic">
+          <div><b>Rules only (no AI)</b><small>Free, offline, no data leaves this computer. Scores loudness, surprise words, reactions and action; hooks are basic.</small></div></label>
+        <label class="mode" id="m_api"><input type="radio" name="aimode" value="api">
+          <div><b>AI with my API key</b><small>Short transcript excerpts around candidate moments (and each clip's text) are sent to the provider you choose, and billed to your account.</small></div></label>
+      </div>
+      <div id="apibox" style="margin-top:14px">
+        <div class="row">
+          <div><label>Provider</label><select id="aiprov"></select></div>
+          <div><label>Model</label><input id="aimodel" list="modellist" placeholder="claude-sonnet-5-5"><datalist id="modellist"></datalist></div>
+        </div>
+        <div id="baseurlrow" style="display:none"><label>API address</label><input id="aibase" placeholder="https://api.openai.com/v1"></div>
+        <label>API key</label>
+        <input id="aikey" type="password" autocomplete="off" placeholder="paste your key">
+        <div class="hint" id="keyhint"></div>
+      </div>
+      <div style="margin-top:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+        <button class="btn" id="aisave">Save</button>
+        <button class="btn ghost" id="aitest">Test connection</button>
+        <button class="btn ghost" id="aiclear" style="display:none">Remove saved key</button>
+        <span class="hint" id="aimsg"></span>
+      </div>
+      <div class="hint" style="margin-top:14px">Your key is saved only on this computer, in <code>config/secrets.env</code>, and is never shown again after saving.
+        A typical stream costs cents with Sonnet-class models; Haiku-class models are cheaper. The log shows how many tokens each run used.</div>
+    </div>
+  </section>
+
+  <!-- CREATORS -->
+  <section id="creators">
+    <div class="card" style="margin-bottom:16px">
+      <h2>Add a creator</h2>
+      <div class="row3">
+        <div><label>Name</label><input id="cname" placeholder="Streamer name"></div>
+        <div><label>Platform</label><select id="cplat"><option value="twitch">Twitch</option><option value="youtube">YouTube</option><option value="kick">Kick</option></select></div>
+        <div><label>Permission</label><select id="cperm">
+          <option value="explicitly_authorized">Explicitly authorized</option><option value="official_clipping_program">Official clipping program</option>
+          <option value="permission_requested">Permission requested</option><option value="unknown" selected>Unknown</option><option value="not_authorized">Not authorized</option></select></div>
+      </div>
+      <div class="row">
+        <div><label>Channel link (optional)</label><input id="curl" placeholder="https://www.twitch.tv/name"></div>
+        <div><label>Allows added music / promotion?</label><select id="cmusic"><option value="">Not set</option><option value="true">Yes</option><option value="false">No</option></select></div>
+      </div>
+      <div style="margin-top:14px"><button class="btn" id="cadd">Add creator</button></div>
+    </div>
+    <div class="card"><h3>Creators &amp; permissions</h3><table><thead><tr><th>Name</th><th>Platform</th><th>Permission</th><th>Added music</th></tr></thead>
+      <tbody id="creatorrows"></tbody></table></div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (url, opts) => {
+  const r = await fetch(url, opts && opts.body ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(opts.body)} : opts);
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch (e) {} throw new Error(m); }
+  return r.json();
+};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => { if (t == null) return '-'; t = Math.round(t); const h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = t%60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`; };
+const toast = (m, ms = 4000) => { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); };
+const STEPS = ['audio','features','transcribe','music_scan','chat','moments','clips'];
+const STEP_NAMES = {audio:'Audio', features:'Excitement', transcribe:'Transcribe', music_scan:'Music scan', chat:'Chat', moments:'Find moments', clips:'Edit clips'};
+let tab = 'dash';
+
+document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('active', s.id === b.dataset.tab));
+  tab = b.dataset.tab; refreshTab();
+  try { localStorage.setItem('tab', tab); } catch (e) {}
+});
+
+// ---------------- dashboard
+async function loadOverview() {
+  let o;
+  try { o = await api('/api/overview'); } catch (e) { $('#wtext').textContent = 'engine offline'; $('#wdot').className = 'dot'; return; }
+  const busy = o.worker.busy || !!o.current;
+  $('#wdot').className = 'dot ' + (busy ? 'busy' : 'idle');
+  $('#wtext').textContent = busy ? `working${o.worker.queued ? ` · ${o.worker.queued} queued` : ''}${o.worker.renders && o.worker.renders.length ? ' · rendering ' + o.worker.renders.join(', ') : ''}` : 'idle';
+  const s = o.stats;
+  const tiles = [
+    ['Streams', s.streams_discovered], ['Processed', s.streams_processed], ['Hours analyzed', s.hours_analyzed],
+    ['Moments found', s.candidates_found], ['Clips made', s.clips_rendered], ['Approved', s.clips_approved],
+    ['Rejected', s.clips_rejected], ['Clips with music', s.clips_with_music], ['Processing time', fmt(s.processing_time_s)],
+    ['Storage', s.storage_mb > 1000 ? (s.storage_mb/1000).toFixed(1) + ' GB' : s.storage_mb + ' MB']];
+  $('#tiles').innerHTML = tiles.map(([k, v]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="k">${k}</div></div>`).join('');
+  const c = o.current;
+  if (c) {
+    const st = c.status.replace('running:', '');
+    const step = st.split(' ')[0]; const pct = (st.match(/(\d+)%/) || [])[1];
+    const idx = STEPS.indexOf(step);
+    $('#current').innerHTML = `<div><b>${esc(c.name || 'stream')}</b> · ${esc(c.title || '')} <span class="hint">(${fmt(c.duration)})</span></div>
+      <div class="steps">${STEPS.map((x, i) => `<span class="step ${i < idx ? 'done' : i === idx ? 'run' : ''}">${STEP_NAMES[x]}${i === idx && pct ? ' ' + pct + '%' : ''}</span>`).join('')}</div>
+      <div class="bar"><div style="width:${Math.round(((idx + (pct ? pct/100 : 0.3)) / STEPS.length) * 100)}%"></div></div>`;
+  } else {
+    $('#current').innerHTML = `<div class="hint">${o.worker.queued ? 'Starting…' : 'Nothing running. Start one from <b>New job</b>.'}</div>`;
+  }
+  $('#engineinfo').innerHTML = `Transcription: <b>Whisper ${esc(o.whisper)}</b><br>Worker: ${o.worker.busy ? 'busy' : 'waiting for jobs'}${o.worker.last_error ? `<br><span style="color:var(--bad)">${esc(o.worker.last_error)}</span>` : ''}`;
+}
+
+let lastLog = 0;
+async function loadLogs() {
+  const rows = await api('/api/logs?after=' + lastLog).catch(() => []);
+  if (!rows.length) return;
+  const box = $('#log'); const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  for (const r of rows) {
+    lastLog = Math.max(lastLog, r.id);
+    const d = document.createElement('div');
+    if (r.level === 'error') d.className = 'error';
+    d.innerHTML = `<span class="t">${new Date(r.ts * 1000).toLocaleTimeString()}</span> ${r.stream_id ? `<span class="s">[${r.stream_id}]</span> ` : ''}${esc(r.message.split('\n')[0])}`;
+    box.appendChild(d);
+  }
+  while (box.children.length > 600) box.removeChild(box.firstChild);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function loadAI() {
+  const a = await api('/api/ai-status').catch(() => null);
+  if (!a) return;
+  $('#aistatus').innerHTML = (a.active ? '<span class="badge good">AI on</span> ' : '<span class="badge warn">rules only</span> ') + esc(a.message);
+}
+
+// ---------------- settings
+let aiState = null;
+let aiProviders = [];
+const providerSpec = k => aiProviders.find(p => p.key === k) || {models: [], needs_url: false, default_model: ''};
+function applyAIView() {
+  const mode = document.querySelector('input[name=aimode]:checked')?.value || 'heuristic';
+  const prov = $('#aiprov').value;
+  const spec = providerSpec(prov);
+  $('#apibox').style.display = mode === 'api' ? 'block' : 'none';
+  $('#baseurlrow').style.display = spec.needs_url ? 'block' : 'none';
+  $('#modellist').innerHTML = spec.models.map(m => `<option value="${m}">`).join('');
+  document.querySelectorAll('.modes .mode').forEach(m => m.classList.toggle('sel', m.querySelector('input').checked));
+  const hint = aiState && aiState.keys[prov];
+  $('#keyhint').textContent = hint ? `A key ending ${hint} is saved. Leave the box empty to keep it.` : 'No key saved for this provider yet.';
+  $('#aiclear').style.display = hint ? 'inline-block' : 'none';
+}
+async function loadSettings() {
+  aiState = await api('/api/settings/ai');
+  aiProviders = aiState.providers;
+  $('#aiprov').innerHTML = aiProviders.map(p => `<option value="${p.key}">${esc(p.label)}</option>`).join('');
+  document.querySelector(`input[name=aimode][value=${aiState.mode}]`).checked = true;
+  $('#aiprov').value = aiState.provider; $('#aimodel').value = aiState.model; $('#aibase').value = aiState.openai_base_url;
+  applyAIView();
+}
+document.querySelectorAll('input[name=aimode]').forEach(i => i.onchange = applyAIView);
+$('#aiprov').onchange = () => {
+  const spec = providerSpec($('#aiprov').value);
+  $('#aimodel').value = spec.default_model;
+  $('#aimodel').placeholder = spec.default_model || 'type the model name';
+  applyAIView();
+};
+async function saveAI(extra = {}) {
+  return api('/api/settings/ai', {body: {mode: document.querySelector('input[name=aimode]:checked').value, provider: $('#aiprov').value,
+    model: $('#aimodel').value, openai_base_url: $('#aibase').value, api_key: $('#aikey').value || null, ...extra}});
+}
+$('#aisave').onclick = async () => {
+  try { aiState = await saveAI(); $('#aikey').value = ''; applyAIView(); $('#aimsg').textContent = 'Saved.'; loadAI(); }
+  catch (e) { $('#aimsg').textContent = ''; toast('Not saved: ' + e.message, 7000); }
+};
+$('#aitest').onclick = async () => {
+  $('#aimsg').textContent = 'Testing…';
+  try {
+    aiState = await saveAI(); $('#aikey').value = ''; applyAIView();
+    const r = await api('/api/settings/ai/test', {method: 'POST'});
+    $('#aimsg').innerHTML = (r.ok ? '<span class="badge good">works</span> ' : '<span class="badge bad">failed</span> ') + esc(r.message); loadAI();
+  } catch (e) { $('#aimsg').textContent = ''; toast('Test failed: ' + e.message, 7000); }
+};
+$('#aiclear').onclick = async () => {
+  if (!confirm('Remove the saved API key from this computer?')) return;
+  aiState = await saveAI({api_key: null, clear_key: true}); applyAIView(); $('#aimsg').textContent = 'Key removed.'; loadAI();
+};
+
+// ---------------- new job
+const jobOpts = () => ({streamer: $('#streamer').value.trim() || null, permission: $('#perm').value || null,
+  focus: $('#focus').value.trim() || null, max_clips: parseInt($('#maxclips').value) || null, content_type: $('#ctype').value});
+$('#go').onclick = async () => {
+  const src = $('#src').value.trim();
+  if (!src) { toast('Paste at least one link or file path first.'); return; }
+  $('#go').disabled = true; $('#gomsg').textContent = 'Checking links…';
+  try {
+    const r = await api('/api/process', {body: {source: src, ...jobOpts()}});
+    const bad = r.errors.map(e => `${e.source}: ${e.error}`).join('\n');
+    $('#gomsg').textContent = `Queued ${r.queued.length} stream(s).` + (r.errors.length ? ` ${r.errors.length} could not be added.` : '');
+    $('#src').value = r.errors.map(e => e.source).join('\n');   // keep only the failed ones for fixing
+    if (bad) toast('Not added:\n' + bad, 9000);
+    else document.querySelector('#nav button[data-tab=dash]').click();
+  } catch (e) { $('#gomsg').textContent = ''; toast('Could not start: ' + e.message, 8000); }
+  $('#go').disabled = false;
+};
+
+// upload with progress (XHR gives upload progress events; fetch doesn't)
+function uploadForm(url, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest(); x.open('POST', url);
+    x.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+    x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText) } catch (e) {}
+      x.status < 300 ? resolve(j) : reject(new Error(j.detail || x.statusText)); };
+    x.onerror = () => reject(new Error('upload failed (is the engine window still open?)'));
+    x.send(form);
+  });
+}
+function dropZone(zone, input, picker, onFiles) {
+  picker.onclick = e => { e.preventDefault(); input.click(); };
+  input.onchange = () => { onFiles([...input.files]); input.value = ''; };
+  zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
+  zone.ondragleave = () => zone.classList.remove('over');
+  zone.ondrop = e => { e.preventDefault(); zone.classList.remove('over'); onFiles([...e.dataTransfer.files]); };
+}
+dropZone($('#vdrop'), $('#vfile'), $('#vpick'), async files => {
+  for (const f of files) {
+    const el = document.createElement('div'); el.className = 'up';
+    el.innerHTML = `<b>${esc(f.name)}</b> · ${(f.size / 1e6).toFixed(0)} MB <span class="st">uploading…</span><div class="bar"><div style="width:0%"></div></div>`;
+    $('#vuploads').appendChild(el);
+    const fd = new FormData(); fd.append('file', f);
+    const o = jobOpts(); for (const [k, v] of Object.entries(o)) if (v != null) fd.append(k, v);
+    try {
+      const r = await uploadForm('/api/videos/upload', fd, p => el.querySelector('.bar div').style.width = (p * 100).toFixed(0) + '%');
+      el.querySelector('.st').innerHTML = `<span class="badge good">queued as stream #${r.queued[0].stream_id}</span>`;
+    } catch (e) { el.querySelector('.st').innerHTML = `<span class="badge bad">${esc(e.message)}</span>`; }
+  }
+});
+
+// ---------------- streams
+async function loadStreams() {
+  const rows = await api('/api/streams');
+  $('#streamrows').innerHTML = rows.length ? rows.map(r => {
+    const st = r.status || ''; const cls = st === 'processed' ? 'good' : st === 'failed' ? 'bad' : st.startsWith('running') ? 'run' : '';
+    const steps = Object.entries(r.steps).map(([k, v]) => `${STEP_NAMES[k] || k} ${v}s`).join(' · ');
+    return `<tr><td>${r.id}</td><td>${esc(r.streamer || '-')}<div class="hint">${esc(r.platform)} · ${esc((r.permission_status || '').replace(/_/g,' '))}</div></td>
+      <td>${esc(r.title || r.source_url)}${r.error ? `<div class="hint" style="color:var(--bad)">${esc(r.error)}</div>` : ''}</td>
+      <td>${fmt(r.duration)}</td>
+      <td><select onchange="setProfile(${r.id}, this.value, this)" style="width:170px; padding:6px 8px" title="${esc(r.profile_reason || '')}">
+        ${(window._profiles || []).map(p => `<option value="${p.key}" ${p.key === r.profile ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+        ${r.profile === 'auto' ? '<option value="auto" selected>auto (decided at ranking)</option>' : ''}</select>
+        <div class="hint">${esc(r.profile_reason || '')}</div></td>
+      <td><span class="badge ${cls}">${esc(st.replace('running:', ''))}</span></td>
+      <td class="hint">${esc(steps)}</td><td>${r.clips}</td>
+      <td style="white-space:nowrap"><button class="btn ghost" onclick="showMoments(${r.id}, '${esc(r.streamer || '').replace(/'/g, '')}')">Moments</button>
+        ${st === 'failed' ? `<button class="btn ghost" onclick="retry(${r.id})">Retry</button>` : ''}</td></tr>`;
+  }).join('') : `<tr><td colspan="9"><div class="empty">No streams yet.</div></td></tr>`;
+  if (momentStream) showMoments(momentStream, null, true);
+}
+let momentStream = null;
+async function showMoments(id, name, quiet) {
+  momentStream = id;
+  const rows = await api(`/api/streams/${id}/candidates`);
+  $('#momentscard').style.display = 'block';
+  if (name !== null) $('#momentstitle').textContent = `Moments · stream #${id}${name ? ' · ' + name : ''}`;
+  $('#momentrows').innerHTML = rows.length ? rows.map(c => `<tr>
+    <td><b>${Math.round(c.score)}</b></td><td>${fmt(c.start)}–${fmt(c.end)}<div class="hint">${Math.round(c.end - c.start)}s</div></td>
+    <td>${esc((c.category || '').replace(/_/g, ' '))}</td>
+    <td>${c.status === 'selected' ? '<span class="badge good">kept</span>' : '<span class="badge warn">rejected</span>'}
+      <div class="hint">${esc(c.reason || c.why || c.summary || '')}</div></td>
+    <td>${c.clip_id ? `<span class="badge good">clip #${c.clip_id}</span>` : `<button class="btn ghost" onclick="renderMoment(${c.id})">Render anyway</button>`}</td></tr>`).join('')
+    : `<tr><td colspan="5"><div class="empty">No moments were found in this stream.</div></td></tr>`;
+  if (!quiet) $('#momentscard').scrollIntoView({behavior: 'smooth'});
+}
+async function renderMoment(id) {
+  await api(`/api/candidates/${id}/render`, {method: 'POST'});
+  toast('Rendering… it will appear on the Clips tab in a few seconds to a minute.', 6000);
+}
+async function setProfile(id, key, el) {
+  const p = (window._profiles || []).find(x => x.key === key);
+  if (!confirm(`Re-rank this stream as "${p ? p.label : key}"?\n\nThe transcript and audio analysis are reused. New picks are added; clips you already have stay.`)) { loadStreams(); return; }
+  await api(`/api/streams/${id}/profile`, {body: {profile: key}});
+  toast('Re-ranking… new picks appear on the Clips tab when it finishes.', 6000);
+  loadStreams();
+}
+async function loadProfiles() {
+  window._profiles = await api('/api/profiles').catch(() => []);
+  const sel = $('#ctype');
+  sel.innerHTML = '<option value="auto">Auto-detect (recommended)</option>' + window._profiles.map(p => `<option value="${p.key}">${esc(p.label)}</option>`).join('');
+  sel.onchange = showTypeHelp; showTypeHelp();
+}
+function showTypeHelp() {
+  const p = (window._profiles || []).find(x => x.key === $('#ctype').value);
+  $('#ctypehelp').innerHTML = p ? `<b>${esc(p.short)}.</b> How it ranks:<ul style="margin:6px 0 0 18px; padding:0">${p.ranks.map(r => `<li>${esc(r)}</li>`).join('')}</ul>`
+    : 'The engine decides from the video title and how much of the audio is music. You can change it later on the Streams tab and re-rank.';
+}
+async function retry(id) { await api(`/api/streams/${id}/retry`, {method: 'POST'}); toast('Retrying.'); loadStreams(); }
+
+// ---------------- clips
+const SUBS = [['hook_strength','Hook'],['payoff','Payoff'],['entertainment','Entertain'],['unexpectedness','Surprise'],
+              ['contextual_clarity','Clarity'],['shareability','Share'],['emotional_intensity','Emotion'],['audio_excitement','Audio']];
+let clipSig = '';
+async function loadClips(force) {
+  const q = `?min_score=${parseFloat($('#minscore').value) || 0}` + ($('#approvalf').value ? `&approval=${$('#approvalf').value}` : '');
+  const rows = await api('/api/clips' + q);
+  if (!window._songs) window._songs = await api('/api/songs').catch(() => []);
+  const sig = JSON.stringify(rows.map(r => [r.id, r.updated_at, r.approval]));
+  if (!force && sig === clipSig) return;   // don't reload videos that are playing
+  clipSig = sig;
+  $('#cliplist').innerHTML = rows.length ? rows.map(c => {
+    const sc = c.score ?? 0; const cls = sc >= 80 ? 'hi' : sc >= 70 ? 'mid' : 'lo';
+    const subs = c.subscores || {};
+    const m = c.music || {};
+    const music = m.song ? `♪ <b>${esc(m.song)}</b> · ${esc((m.mode||'').replace('_',' '))} · ${esc(m.volume || '')} · fit ${Math.round(m.fit)}`
+      : `No song: ${esc(m.blocked || 'not evaluated')}`;
+    const appr = c.approval === 'approved' ? '<span class="badge good">approved</span>' : c.approval === 'rejected' ? '<span class="badge bad">rejected</span>' : '<span class="badge">needs review</span>';
+    const ready = c.publish_ready ? '<span class="badge good">publish-ready</span>' : `<span class="badge warn" title="${esc(c.block_reason || '')}">not ready</span>`;
+    return `<div class="clip" data-id="${c.id}" data-streamer="${esc(c.streamer || '')}" data-platform="${esc(c.platform || '')}" data-dur="${Math.round(c.duration || 0)}" data-score="${c.score ?? 0}" data-ts="${c.updated_at || 0}">
+      ${c.has_video ? `<video src="/media/clip/${c.id}" poster="/media/thumb/${c.id}" controls preload="none"></video>` : `<div class="empty" style="margin:14px">${esc(c.status)} ${esc(c.error || '')}</div>`}
+      <div class="body">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+          <span class="score ${cls}">${Math.round(sc)}</span><span class="hint">#${c.id} · ${esc(c.streamer || '')} · ${fmt(c.start)} · ${Math.round(c.duration)}s</span>
+          <span style="margin-left:auto">${appr}</span></div>
+        <div class="hook">${esc(c.hooks[c.hook_choice] || c.title || '')}</div>
+        <div class="hint">${esc((c.category || '').replace(/_/g, ' '))}${c.why ? ' — ' + esc(c.why) : ''}</div>
+        <div class="subs">${SUBS.filter(([k]) => subs[k] != null).map(([k, n]) => `<div class="sub"><span style="width:56px">${n}</span><div class="m"><i style="width:${subs[k]}%"></i></div><span>${Math.round(subs[k])}</span></div>`).join('')}</div>
+        <div class="music">${music}
+          <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap">
+            <select id="ms${c.id}" style="flex:1; min-width:120px; padding:6px 8px">
+              <option value="">Auto (best fit)</option>${(window._songs || []).map(s => `<option value="${esc(s.slug)}" ${m.song === s.slug ? 'selected' : ''}>${esc(s.title)} – ${esc(s.artist)}</option>`).join('')}
+              <option value="__off">No song</option></select>
+            <select id="mm${c.id}" style="width:130px; padding:6px 8px"><option value="">Auto placement</option>
+              <option value="payoff_drop">Drop on payoff</option><option value="reaction_tail">Reaction tail</option>
+              <option value="underscore">Underscore</option><option value="cold_open">Cold open</option></select>
+            <input id="me${c.id}" placeholder="song in at m:ss" title="Where in this clip the song starts (optional)" style="width:115px; padding:6px 8px">
+            <input id="md${c.id}" placeholder="chorus at m:ss" title="Where in this clip the chorus/hook should hit (e.g. 0:48). Leave empty for automatic." style="width:115px; padding:6px 8px">
+            <select id="mv${c.id}" style="width:120px; padding:6px 8px" title="How loud the song is">
+              <option value="">Volume: auto</option><option value="trailer" ${m.volume === 'trailer' ? 'selected' : ''}>Trailer (loud)</option>
+              <option value="featured" ${m.volume === 'featured' ? 'selected' : ''}>Featured</option><option value="balanced" ${m.volume === 'balanced' ? 'selected' : ''}>Balanced</option>
+              <option value="subtle" ${m.volume === 'subtle' ? 'selected' : ''}>Subtle</option></select>
+            <label class="check" title="Only tick this if you listened: the detector flagged sound effects as music"><input type="checkbox" id="mi${c.id}"> No music here (I checked)</label>
+            <button class="btn ghost" style="padding:6px 10px" onclick="applyMusic(${c.id})">Apply</button></div></div>
+        <div class="hint">${ready}${c.cut_s ? ` · ${c.cut_s}s dead air removed` : ''}${c.loudness != null ? ` · ${c.loudness} LUFS` : ''} · <span title="AI mode">${esc(c.ai_mode || '')}</span></div>
+        <div class="actions">
+          <button class="btn good" onclick="setApproval(${c.id},'approved')">Approve</button>
+          <button class="btn ghost" onclick="setApproval(${c.id},'rejected')">Reject</button>
+          ${m.song ? `<a class="btn ghost" href="/media/clip/${c.id}?clean=true" target="_blank">No-song version</a>` : ''}
+        </div>
+      </div></div>`;
+  }).join('') : `<div class="empty">No clips yet. Process a stream from <b>New job</b>.</div>`;
+}
+async function applyMusic(id) {
+  const song = $('#ms' + id).value, mode = $('#mm' + id).value;
+  const parseT = s => { s = s.trim(); if (!s) return null; const p = s.split(':').map(Number); const v = p.length === 2 ? p[0] * 60 + p[1] : p[0]; return isNaN(v) ? NaN : v; };
+  const drop = parseT($('#md' + id).value), enter = parseT($('#me' + id).value);
+  if (Number.isNaN(drop) || Number.isNaN(enter)) return toast('Times look wrong. Use m:ss, e.g. 0:48');
+  if (enter != null && drop == null) return toast('Set "chorus at" too, so the engine knows where the hook should land.');
+  await api(`/api/clips/${id}/music`, {body: song === '__off' ? {off: true} : {song: song || null, mode: mode || null,
+    drop_at: drop, enter_at: enter, ignore_detected: $('#mi' + id).checked, volume: $('#mv' + id).value || null}});
+  toast('Re-rendering with the new music… the card updates when it finishes.', 6000);
+}
+async function setApproval(id, a) { await api(`/api/clips/${id}/approval`, {body: {approval: a}}); loadClips(true); loadOverview(); }
+$('#minscore').onchange = () => loadClips(true); $('#approvalf').onchange = () => loadClips(true);
+$('#exportbtn').onclick = async () => {
+  const r = await api('/api/export', {body: {}});
+  toast(r.exported.length ? `Exported ${r.exported.length} clip(s) to ${r.folder}` : (r.messages.join(' ') || 'Nothing approved to export yet.'), 7000);
+};
+$('#openexp').onclick = () => api('/api/open-exports', {method: 'POST'});
+
+// ---------------- music & creators
+// ---------------- music: upload, library, artist profiles
+let songFile = null;
+dropZone($('#sdrop'), $('#sfile'), $('#spick'), files => {
+  songFile = files[0] || null;
+  $('#sdroptext').textContent = songFile ? `${songFile.name} (${(songFile.size / 1e6).toFixed(1)} MB)` : 'Drop a song file here';
+  if (songFile && !$('#stitle').value) $('#stitle').value = songFile.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+});
+$('#supload').onclick = async () => {
+  if (!songFile) return toast('Choose a song file first.');
+  if (!$('#stitle').value.trim() || !$('#sartist').value.trim()) return toast('Add the song title and artist.');
+  if (!$('#srights').checked) return toast('Tick the box confirming you own or control the rights. Only your own songs can be placed in clips.', 6000);
+  const fd = new FormData();
+  fd.append('file', songFile); fd.append('title', $('#stitle').value.trim()); fd.append('artist', $('#sartist').value.trim());
+  fd.append('confirm_rights', 'true'); fd.append('explicit', $('#sexplicit').checked ? 'true' : '');
+  fd.append('priority', $('#sprio').value); fd.append('tiktok_sound', $('#stiktok').value);
+  fd.append('instagram_sound', $('#sinsta').value); fd.append('youtube_sound', $('#syt').value);
+  $('#supload').disabled = true;
+  try {
+    await uploadForm('/api/songs/upload', fd, p => $('#smsg').textContent = `Uploading ${(p * 100).toFixed(0)}%`);
+    $('#smsg').textContent = 'Uploaded. Analyzing…';
+    songFile = null; $('#sdroptext').textContent = 'Drop a song file here';
+    ['#stitle', '#stiktok', '#sinsta', '#syt'].forEach(s => $(s).value = ''); $('#srights').checked = false; $('#sexplicit').checked = false;
+    loadImports();
+  } catch (e) { $('#smsg').textContent = ''; toast('Upload failed: ' + e.message, 7000); }
+  $('#supload').disabled = false;
+};
+let importsBusy = false;
+async function loadImports() {
+  const rows = await api('/api/songs/imports').catch(() => []);
+  $('#simports').innerHTML = rows.map(r => `<div class="up"><b>${esc(r.title)}</b> · ${esc(r.artist)} ·
+    ${r.state === 'analyzing' ? '<span class="badge run">analyzing…</span>' : r.state === 'done' ? '<span class="badge good">ready</span>' : '<span class="badge bad">failed</span>'}
+    <span class="hint">${esc(r.message)}</span></div>`).join('');
+  const busy = rows.some(r => r.state === 'analyzing');
+  if (importsBusy && !busy) { loadSongs(); toast('Song analyzed and added to the library.'); $('#smsg').textContent = ''; }
+  importsBusy = busy;
+}
+async function loadSongs() {
+  const rows = await api('/api/songs');
+  $('#songrows').innerHTML = rows.length ? rows.map(s => `<tr>
+    <td><b>${esc(s.title)}</b><div class="hint">${esc(s.artist)}${s.explicit ? ' · explicit' : ''}${s.lyrics ? ` · ${s.lyrics} lyric lines` : ''}
+      ${Object.keys(s.official_sounds).length ? ' · official sound: ' + esc(Object.keys(s.official_sounds).join(', ')) : ''}</div>
+      <audio src="/media/song/${s.id}" controls preload="none"></audio>
+      ${s.error ? `<div class="hint" style="color:var(--bad)">analysis failed: ${esc(s.error)}</div>` : ''}</td>
+    <td>${s.bpm ?? '?'} BPM<div class="hint">${esc(s.key || '?')}</div></td><td>${esc(s.mood.join(', '))}</td>
+    <td class="hint">${s.sections.map(x => `${x.hook ? '<b style="color:var(--accent)">HOOK ' : ''}${x.label} ${fmt(x.start)}${x.hook ? '</b>' : ''}`).join(' · ')}</td>
+    <td><select onchange="setPrio(${s.id}, this.value)" style="width:70px">${[5,4,3,2,1].map(p => `<option ${p === s.priority ? 'selected' : ''}>${p}</option>`).join('')}</select></td>
+    <td>${s.uses}</td>
+    <td><button class="btn ghost" onclick="editSong(${s.id})">Edit</button>
+      <button class="btn ghost" onclick="delSong(${s.id}, '${esc(s.title).replace(/'/g, '')}')">Remove</button></td></tr>`).join('')
+    : `<tr><td colspan="7"><div class="empty">No songs yet. Upload one above.</div></td></tr>`;
+  const artists = await api('/api/artists').catch(() => []);
+  window._artists = artists;
+  $('#artistlist').innerHTML = artists.map(a => `<option value="${esc(a.name)}">`).join('');
+}
+async function editSong(id) {
+  const s = (await api('/api/songs')).find(x => x.id === id);
+  if (!s) return;
+  const t = prompt('Song title:', s.title);
+  if (t === null) return;
+  const a = prompt('Artist:', s.artist || '');
+  if (a === null) return;
+  if (!t.trim() || !a.trim()) return toast('Title and artist can\'t be empty.');
+  const ex = confirm(`Is "${t.trim()}" explicit?\n\nOK = explicit, Cancel = clean`);
+  await api(`/api/songs/${id}`, {body: {title: t.trim(), artist: a.trim(), explicit: ex}});
+  toast('Song details saved.'); loadSongs(); window._songs = null;
+}
+async function setPrio(id, p) { await api(`/api/songs/${id}`, {body: {priority: parseInt(p)}}); toast('Priority saved.'); }
+async function delSong(id, title) {
+  if (!confirm(`Remove "${title}" from the library? Clips already rendered keep their audio.`)) return;
+  await api(`/api/songs/${id}/delete`, {method: 'POST'}); loadSongs();
+}
+const csv = s => s.split(',').map(x => x.trim()).filter(Boolean);
+$('#aname').onchange = () => {
+  const a = (window._artists || []).find(x => x.name.toLowerCase() === $('#aname').value.trim().toLowerCase());
+  if (!a) return;
+  $('#adesc').value = a.description; $('#agood').value = a.good_fit.join(', '); $('#aavoid').value = a.avoid.join(', ');
+  $('#acta').value = a.cta.join(', '); $('#atag').value = a.sound_tag; $('#avol').value = a.volume;
+};
+$('#asave').onclick = async () => {
+  if (!$('#aname').value.trim()) return toast('Enter the artist name.');
+  try {
+    await api('/api/artists', {body: {name: $('#aname').value.trim(), description: $('#adesc').value, good_fit: csv($('#agood').value),
+      avoid: csv($('#aavoid').value), cta: csv($('#acta').value), sound_tag: $('#atag').value, volume: $('#avol').value}});
+    toast('Artist profile saved.'); loadSongs();
+  } catch (e) { toast('Could not save: ' + e.message); }
+};
+
+// ---------------- creators
+const PERMS = ['explicitly_authorized','official_clipping_program','permission_requested','unknown','not_authorized'];
+async function loadCreators() {
+  const rows = await api('/api/streamers');
+  $('#creatorrows').innerHTML = rows.length ? rows.map(r => `<tr><td><b>${esc(r.name)}</b>${r.channel_url ? `<div class="hint">${esc(r.channel_url)}</div>` : ''}</td><td>${esc(r.platform)}</td>
+    <td><select onchange="setPerm(${r.id}, this.value)">${PERMS.map(p => `<option value="${p}" ${p === r.permission_status ? 'selected' : ''}>${p.replace(/_/g, ' ')}</option>`).join('')}</select></td>
+    <td><select onchange="setMusic(${r.id}, this.value)" style="width:110px">
+      <option value="" ${r.allows_added_music == null ? 'selected' : ''}>not set</option>
+      <option value="true" ${r.allows_added_music === 1 ? 'selected' : ''}>yes</option>
+      <option value="false" ${r.allows_added_music === 0 ? 'selected' : ''}>no</option></select></td></tr>`).join('')
+    : `<tr><td colspan="4"><div class="empty">No creators yet. Add one above, or they're added automatically when you process a stream.</div></td></tr>`;
+}
+async function setPerm(id, p) { await api(`/api/streamers/${id}/permission`, {body: {permission_status: p}}); toast('Permission saved. Re-render or re-process clips to update publish-ready status.'); }
+async function setMusic(id, v) { await api(`/api/streamers/${id}/music`, {body: {allows_added_music: v === '' ? null : v === 'true'}}); toast('Saved.'); }
+$('#cadd').onclick = async () => {
+  if (!$('#cname').value.trim()) return toast('Enter the creator name.');
+  try {
+    await api('/api/streamers', {body: {name: $('#cname').value.trim(), platform: $('#cplat').value, channel_url: $('#curl').value.trim() || null,
+      permission_status: $('#cperm').value, allows_added_music: $('#cmusic').value === '' ? null : $('#cmusic').value === 'true'}});
+    $('#cname').value = ''; $('#curl').value = ''; toast('Creator saved.'); loadCreators();
+  } catch (e) { toast('Could not add: ' + e.message); }
+};
+
+// ---------------- loop
+function refreshTab() {
+  if (tab === 'streams') loadStreams();
+  if (tab === 'clips') loadClips(true);
+  if (tab === 'music') loadSongs();
+  if (tab === 'creators') loadCreators();
+  if (tab === 'settings') loadSettings();
+}
+async function tick() {
+  await loadOverview(); await loadLogs();
+  if (tab === 'streams') loadStreams();
+  if (tab === 'clips') loadClips(false);
+  if (tab === 'music' || importsBusy) loadImports();
+}
+try { const t = localStorage.getItem('tab'); if (t) document.querySelector(`#nav button[data-tab=${t}]`)?.click(); } catch (e) {}
+async function loadHealth() {
+  const h = await api('/api/health').catch(() => null);
+  if (!h) return;
+  $('#health').innerHTML = h.items.map(i => `<div>${i.ok ? '<span class="badge good">ok</span>' : '<span class="badge bad">fix</span>'} <b>${esc(i.name)}</b> · ${esc(i.detail)}</div>`).join('');
+}
+$('#quit').onclick = async () => {
+  if (!confirm('Stop the engine? Any job in progress will resume next time you start it.')) return;
+  await fetch('/api/shutdown', {method: 'POST'}).catch(() => {});
+  document.body.innerHTML = '<main><div class="card"><h2>Engine stopped</h2><div class="hint">You can close this tab. Double-click GTA6Clipper.exe to start it again.</div></div></main>';
+};
+loadProfiles().then(() => { if (tab === 'streams') loadStreams(); }); loadAI(); loadHealth(); setInterval(loadHealth, 30000); tick(); setInterval(tick, 2000);
+</script>
+<script src="/extras.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+[project]
+name = "gta6-clip-engine"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "psutil", "pydantic>=2", "typer", "rich", "numpy", "scipy", "opencv-python-headless",
+  "faster-whisper", "yt-dlp", "requests", "customtkinter",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+clipper = "engine.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
