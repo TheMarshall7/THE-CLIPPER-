@@ -178,7 +178,8 @@ class App(ctk.CTk):
             self.pages[name] = f
             make(f)
         if not self._ffmpeg():
-            self._log("FFmpeg was not found (expected in the 'bin' folder next to this program). Clips cannot be rendered.")
+            self._log("FFmpeg was not found (expected in the 'bin' folder next to this program, or installed on this PC). "
+                      "Install it with:  winget install Gyan.FFmpeg  then restart the app. Clips cannot be rendered without it.")
 
     def _style_titlebar(self) -> None:
         """Dark caption in the app's own colours (Windows 11: caption/border/text colour; Windows 10: dark mode)."""

@@ -73,6 +73,12 @@ def first_run(log=print) -> None:
         for n in rec.notes:
             log("  " + n)
     Database(s.db_path)
+    try:                                   # the face model is not shipped in the source repo: fetch it on first run
+        from engine.video.webcam import ensure_face_model
+        if not ensure_face_model():
+            log("Could not download the face model (no internet?). Clips will use the full-frame layout until it is available.")
+    except Exception:
+        pass
 
 
 def ffmpeg_ok() -> bool:

@@ -38,11 +38,29 @@ YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection
 _LOCAL = threading.local()      # OpenCV's detector keeps per-call state: one instance per thread (renders run in parallel)
 
 
+def ensure_face_model() -> bool:
+    """Download the small (230 KB) face model once if it is missing. True when it is available afterwards."""
+    if YUNET_PATH.exists():
+        return True
+    try:
+        import requests
+
+        r = requests.get(YUNET_URL, timeout=60)
+        r.raise_for_status()
+        YUNET_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = YUNET_PATH.with_suffix(".part")
+        tmp.write_bytes(r.content)
+        tmp.replace(YUNET_PATH)
+        return True
+    except Exception:
+        return False
+
+
 def _detector():
     """YuNet DNN face detector (OpenCV model zoo). OpenCV 5 dropped Haar cascades."""
     det = getattr(_LOCAL, "det", None)
     if det is None:
-        if not YUNET_PATH.exists():
+        if not ensure_face_model():
             raise RuntimeError(f"Face model missing: {YUNET_PATH}. Run `clipper setup` (downloads it from {YUNET_URL}).")
         cv2.setLogLevel(2) if hasattr(cv2, "setLogLevel") else None
         det = _LOCAL.det = cv2.FaceDetectorYN.create(str(YUNET_PATH), "", (320, 320), 0.75, 0.3, 50)

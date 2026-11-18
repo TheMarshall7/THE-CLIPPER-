@@ -4,11 +4,19 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
   "psutil", "pydantic>=2", "typer", "rich", "numpy", "scipy", "opencv-python-headless",
-  "faster-whisper", "yt-dlp", "requests", "customtkinter",
+  "faster-whisper", "yt-dlp", "requests", "customtkinter", "pillow",
+  "librosa", "soundfile",
+  "fastapi", "uvicorn", "python-multipart",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pyflakes"]
+gpu = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12", "nvidia-cuda-nvrtc-cu12"]   # NVIDIA GPU speech recognition (Windows/Linux)
+build = ["pyinstaller"]                                                       # scripts/build_standalone.py
+stems = ["demucs"]                                                            # optional source-music removal (~2 GB)
+
+[project.gui-scripts]
+gta6-clipper = "engine.gui:main"
 
 [project.scripts]
 clipper = "engine.cli:app"

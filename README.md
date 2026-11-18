@@ -4,7 +4,27 @@ Local engine that finds the strongest moments in GTA 6 streams, edits them into 
 word-by-word captions and hooks, and places your own songs on the clips where they fit.
 Media processing is 100% local (FFmpeg, Faster-Whisper, OpenCV, librosa).
 
-## Easiest way: the dashboard
+## Install from GitHub (Windows)
+
+You need **Python 3.11+** and **FFmpeg**. Then, in the folder you cloned:
+
+```
+winget install Gyan.FFmpeg                  # once; restart the terminal afterwards so ffmpeg is on PATH
+python -m venv .venv
+.venv\Scripts\pip install -e .
+.venv\Scripts\python -m engine.gui         # opens the desktop app
+```
+
+- First run picks settings for your PC and downloads the small face model. The speech model (about 1.6 GB) downloads the
+  first time a video is transcribed.
+- **NVIDIA GPU** (much faster transcription): also run `.venv\Scripts\pip install -e ".[gpu]"`.
+- Your songs go in the `Songs` folder it creates; clips appear in `Clips`.
+- Add an AI key (optional) with the gear **Settings** button inside the app. Keys are stored only on your PC.
+- To build the standalone `GTA6Clipper.exe` yourself: `.venv\Scripts\pip install -e ".[build]"` then
+  `.venv\Scripts\python scripts/build_standalone.py` (needs ffmpeg on PATH; produces about 3 GB).
+- The `.exe` files are not stored in this repo (too large); everything above builds from source.
+
+## Easiest way once built: the dashboard
 
 Double-click **`GTA6Clipper.exe`** (in this folder). A small window starts the engine and your browser
 opens the dashboard at http://127.0.0.1:8765 (only reachable from this computer). Keep the window open
