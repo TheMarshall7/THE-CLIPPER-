@@ -281,3 +281,20 @@ def test_all_rejected_for_no_speech_retries_as_gameplay_only_when_type_was_guess
                       ("AI rejected: No speech detected in the candidate window",))
         assert eng._retry_as_gameplay(1) is expect
     assert "Gameplay footage" in eng._no_clips_note(1) and "rejected" in eng._no_clips_note(1)
+
+
+def test_new_clips_come_first_in_review_and_can_be_filtered(tmp_path):
+    d = Database(tmp_path / "t.db")
+    for sid, ts in ((1, 1000.0), (2, 5000.0)):                       # video 2 was made later
+        d.execute("INSERT INTO streams(id,platform,source_url,title,created_at,updated_at) VALUES (?,?,?,?,0,0)",
+                  (sid, "file", f"x{sid}", f"Video {sid}"))
+        for k, score in enumerate((90, 50)):                          # an old video's clips can have HIGHER scores
+            d.execute("INSERT INTO clips(stream_id,start,end,score,status,video_path,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0)",
+                      (sid, 0, 30, score + (10 if sid == 1 else 0), "rendered", "v.mp4", ts + k))
+    order = [c["stream_id"] for c in review.to_review(d)]
+    assert order[:2] == [2, 2] and order[2:] == [1, 1]                # the newest video's batch is shown first
+    assert {c["stream_id"] for c in review.to_review(d, stream_id=1)} == {1}
+    assert review.waiting_count(d) == 4
+    assert [v["stream_id"] for v in review.waiting_by_video(d)] == [2, 1]
+    review.decide(d, 4, "keep")
+    assert review.waiting_count(d) == 3

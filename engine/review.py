@@ -76,18 +76,38 @@ def mark_posted(db: Database, clip_id: int, platform: str = "") -> None:
     db.execute("UPDATE clip_review SET posted=1, posted_at=?, posted_platform=? WHERE clip_id=?", (time.time(), platform, clip_id))
 
 
-def to_review(db: Database, include_auto_kept: bool = True) -> list[dict]:
-    """Rendered clips still waiting for a human decision, most promising first (learned taste, then score)."""
-    rows = db.query("SELECT c.*, s.title AS stream_title FROM clips c JOIN streams s ON s.id=c.stream_id "
-                    "WHERE c.status='rendered' AND c.video_path IS NOT NULL "
-                    "AND c.id NOT IN (SELECT clip_id FROM clip_review WHERE auto=0) "
-                    "AND c.id NOT IN (SELECT clip_id FROM clip_review WHERE auto=1 AND decision='reject')")
+_WAITING = ("c.status='rendered' AND c.video_path IS NOT NULL "
+            "AND c.id NOT IN (SELECT clip_id FROM clip_review WHERE auto=0) "
+            "AND c.id NOT IN (SELECT clip_id FROM clip_review WHERE auto=1 AND decision='reject')")
+
+
+def waiting_count(db: Database) -> int:
+    return db.one(f"SELECT COUNT(*) FROM clips c WHERE {_WAITING}")[0]
+
+
+def to_review(db: Database, stream_id: Optional[int] = None) -> list[dict]:
+    """Rendered clips still waiting for a decision. The NEWEST video's batch comes first (so what you just made is what you
+    see), and inside each video the most promising clips (learned taste, then score) come first."""
+    sql = f"SELECT c.*, s.title AS stream_title FROM clips c JOIN streams s ON s.id=c.stream_id WHERE {_WAITING}"
+    args: tuple = ()
+    if stream_id is not None:
+        sql += " AND c.stream_id=?"
+        args = (stream_id,)
     taste = taste_model(db)
-    out = [dict(r) for r in rows]
+    out = [dict(r) for r in db.query(sql, args)]
+    newest: dict[int, float] = {}
     for r in out:
         r["taste"] = taste_score(db, r, taste)
-    out.sort(key=lambda r: (r["taste"], r["score"] or 0), reverse=True)
+        newest[r["stream_id"]] = max(newest.get(r["stream_id"], 0.0), r["created_at"] or 0.0)
+    out.sort(key=lambda r: (newest[r["stream_id"]], r["stream_id"], r["taste"], r["score"] or 0), reverse=True)
     return out
+
+
+def waiting_by_video(db: Database) -> list[dict]:
+    """[{stream_id, title, n}] for the filter menu, newest video first."""
+    rows = db.query(f"SELECT s.id, s.title, COUNT(*) n, MAX(c.created_at) newest FROM clips c JOIN streams s ON s.id=c.stream_id "
+                    f"WHERE {_WAITING} GROUP BY s.id ORDER BY newest DESC")
+    return [{"stream_id": r["id"], "title": r["title"] or f"Video {r['id']}", "n": r["n"]} for r in rows]
 
 
 def decisions(db: Database, decision: Optional[str] = None) -> list[dict]:

@@ -1236,11 +1236,12 @@ class App(ctk.CTk):
             self._scan_songs()
             songs = self.songs_cache = self.server.songs()
             streams = self.server.streams()[:30]
-            clips = [c for c in self.server.clips()[:100] if c["has_video"]]
+            clips = [c for c in self.server.clips(sort="new", limit=400) if c["has_video"]]       # newest first, never cut by score
             self._refresh_songs(songs)
             self._refresh_streams(streams)
             self._refresh_clips(clips)
             self._refresh_dashboard(songs, streams, clips)
+            self._refresh_review_badge()
             self._refresh_log()
         except Exception as e:      # never let a refresh error kill the window
             self._log(f"(refresh error: {e})")
@@ -1439,6 +1440,22 @@ class App(ctk.CTk):
                 self._clip_row(self.clips_list, c)
         self._redraw("clips", sig, self.clips_list, build)
 
+    def _refresh_review_badge(self) -> None:
+        """Show how many clips wait in Review on the tab itself, and pull newly finished clips into an open Review tab."""
+        from engine import review
+
+        n = review.waiting_count(self.db)
+        last = getattr(self, "_last_waiting", None)
+        if last is not None and n > last:
+            self._log(f"✦ {n - last} new clip(s) ready: open the Review tab (newest are first).")
+        self._last_waiting = n
+        b = self.nav_btns.get("Review")
+        if b is not None:
+            b.configure(text=f"   ⇄    Review" + (f"   ·   {n}" if n else ""))
+        rp = getattr(self, "review_page", None)
+        if rp is not None and self.current == "Review":
+            rp.check_new(n)
+
     def _refresh_progress(self) -> None:
         from engine import progress
         snap = progress.snapshot(self.db)
@@ -1459,7 +1476,7 @@ class App(ctk.CTk):
         self.stat["songs"].configure(text=str(len(songs)))
         active = [s for s in streams if s["status"] not in DONE]
         queue = active or streams[:4]
-        top = clips[:5]
+        top = sorted(clips, key=lambda c: c["score"] or 0, reverse=True)[:5]
 
         def build_q() -> None:
             if not queue:

@@ -152,6 +152,8 @@ class ReviewPage:
         self.history: list[int] = []
         self.reason = review.REASONS[-1]
         self.view = "Review"
+        self.stream_filter: int | None = None
+        self._filter_map: dict = {"All videos": None}
         self.busy = False
         self._build()
         for key, fn in (("<Left>", lambda: self.reject()), ("<Right>", lambda: self.decide("keep")), ("<Up>", lambda: self.decide("post")),
@@ -180,6 +182,11 @@ class ReviewPage:
                                            unselected_color=G.CARD2, text_color=G.IVORY)
         self.tabs.set("Review")
         self.tabs.pack(side="left", padx=(0, 10))
+        self.filter_var = ctk.StringVar(value="All videos")
+        self.filter_menu = ctk.CTkOptionMenu(bar, variable=self.filter_var, values=["All videos"], command=self._on_filter, width=230,
+                                             height=38, fg_color=G.CARD2, button_color=G.LINE, button_hover_color=G.VIOLET,
+                                             dropdown_fg_color=G.CARD2, text_color=G.TEXT)
+        self.filter_menu.pack(side="left", padx=(0, 8))
         G.button(bar, "🧠  Learning", self.learn_dialog, width=130, height=38).pack(side="left", padx=(0, 8))
         G.button(bar, "⚙  Auto-reject…", self.auto_dialog, width=150, height=38).pack(side="left")
 
@@ -250,9 +257,42 @@ class ReviewPage:
             self.render_list()
             return
         keep_id = self.queue[self.i]["id"] if self.queue and self.i < len(self.queue) else None
-        self.queue = review.to_review(self.db)
+        self.queue = review.to_review(self.db, self.stream_filter)
         self.i = next((n for n, c in enumerate(self.queue) if c["id"] == keep_id), 0)
+        self._fill_filter()
         self.show_current()
+
+    def check_new(self, waiting_total: int) -> None:
+        """Called every poll while this tab is open: clips that finished rendering in the background join the queue."""
+        if self.view != "Review" or self.busy:
+            return
+        known = {c["id"] for c in self.queue}
+        fresh = review.to_review(self.db, self.stream_filter)
+        if any(c["id"] not in known for c in fresh):
+            cur = self.queue[self.i]["id"] if 0 <= self.i < len(self.queue) else None
+            new_n = sum(1 for c in fresh if c["id"] not in known)
+            self.queue = fresh
+            self.i = next((n for n, c in enumerate(fresh) if c["id"] == cur), 0)
+            self._fill_filter()
+            self.show_current()
+            self._toast(f"✦ {new_n} new clip(s) just finished")
+
+    def _fill_filter(self) -> None:
+        """The 'Video:' menu: All videos, or just one video's waiting clips."""
+        vids = review.waiting_by_video(self.db)
+        self._filter_map = {"All videos": None}
+        for v in vids:
+            self._filter_map[f"{v['title'][:34]}  ({v['n']})"] = v["stream_id"]
+        cur = next((k for k, sid in self._filter_map.items() if sid == self.stream_filter), "All videos")
+        if cur == "All videos" and self.stream_filter is not None:
+            self.stream_filter = None
+        self.filter_menu.configure(values=list(self._filter_map))
+        self.filter_var.set(cur)
+
+    def _on_filter(self, label: str) -> None:
+        self.stream_filter = self._filter_map.get(label)
+        self.history.clear()
+        self.refresh()
 
     def set_view(self, name: str) -> None:
         self.view = name
@@ -418,7 +458,7 @@ class ReviewPage:
             self.app._log("Nothing to undo.")
             return
         review.undo(self.db, cid)
-        self.queue = review.to_review(self.db)
+        self.queue = review.to_review(self.db, self.stream_filter)
         self.i = next((n for n, c in enumerate(self.queue) if c["id"] == cid), 0)
         self.show_current()
         self._toast("↶ Undone — back on this clip")

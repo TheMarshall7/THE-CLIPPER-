@@ -436,7 +436,7 @@ def retry(stream_id: int) -> dict:
 
 # ------------------------------------------------------------------ clips
 @app.get("/api/clips")
-def clips(min_score: float = 0, approval: Optional[str] = None) -> list[dict]:
+def clips(min_score: float = 0, approval: Optional[str] = None, sort: str = "score", limit: int = 200) -> list[dict]:
     sql = ("SELECT c.*, s.platform, s.title stream_title, s.source_url, st.name streamer, k.category, k.summary, "
            "k.scores_json, k.ai_json FROM clips c JOIN streams s ON s.id=c.stream_id "
            "LEFT JOIN streamers st ON st.id=s.streamer_id LEFT JOIN candidates k ON k.id=c.candidate_id "
@@ -445,7 +445,8 @@ def clips(min_score: float = 0, approval: Optional[str] = None) -> list[dict]:
     if approval:
         sql += " AND c.approval=?"
         params.append(approval)
-    sql += " ORDER BY c.score DESC LIMIT 200"
+    # "new": the most recently made clips first (so a fresh batch is never hidden behind older, higher-scored clips)
+    sql += (" ORDER BY c.created_at DESC, c.id DESC" if sort == "new" else " ORDER BY c.score DESC") + f" LIMIT {int(limit)}"
     out = []
     for r in _db.query(sql, params):
         qc = loads(r["qc_json"], {}) or {}
